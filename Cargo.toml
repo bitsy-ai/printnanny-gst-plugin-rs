@@ -1,0 +1,39 @@
+[package]
+name = "printnanny-gst-plugin-rs"
+description = "PrintNanny Gstreamer Plugins"
+version = "0.1.0"
+edition = "2021"
+authors = ["Leigh Johnson <leigh@printnanny.ai>"]
+license = "AGPL-3.0-or-later"
+rust-version = "1.63"
+repository = "https://github.com/bitsy-ai/printnanny-gst-plugin-rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+arrow = "23.0.0"                     # Rust implementation of Apache Arrow
+byte-slice-cast = "1.2.1"    # Safely cast bytes slices from/to slices of built-in fundamental numeric types
+flexbuffers = "2.0.0"                  # Official FlexBuffers Rust runtime library.
+flatbuffers = "2.1.2"             # Official FlatBuffers Rust runtime library.
+libc = "0.2.134"             # Raw FFI bindings to platform libraries like libc. 
+gst = { package = "gstreamer", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
+gst-sys = { package = "gstreamer-sys", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
+gst-base = { package = "gstreamer-base", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
+gst-video = { package = "gstreamer-video", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
+once_cell = "1.0"
+thiserror = "1.0.37"               # derive(Error)
+polars = { version = "0.24.2", features = ["dtype-struct","dtype-time", "ipc", "fmt", "list", "dot_product", "cum_agg", "list_to_struct", "cumulative_eval"] }
+serde = { version = "1", features = ["derive"] }
+
+[lib]
+name = "gstprintnanny"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dev-dependencies]
+gst-check = { package = "gstreamer-check", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", features = ["v1_20"] }
+
+[build-dependencies]
+gst-plugin-version-helper = {  git = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs" }
+flatc-rust = "0.2.0"    # FlatBuffers flatc command as API
+
