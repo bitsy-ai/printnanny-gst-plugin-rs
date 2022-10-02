@@ -91,9 +91,6 @@ impl DataframeDecoder {
 }
 
 // This module contains the private implementation details of our element
-//
-// This module contains the private implementation details of our element
-//
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
         "printnanny",

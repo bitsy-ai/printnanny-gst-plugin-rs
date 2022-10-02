@@ -1,4 +1,3 @@
-use arrow::record_batch::RecordBatch;
 use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
@@ -9,14 +8,9 @@ use flexbuffers::{Reader, ReaderError};
 use once_cell::sync::Lazy;
 use polars::prelude::*;
 use std::i32;
-use std::io::Write;
 use std::sync::Mutex;
 
-use crate::message_nnstreamer::nnstreamer;
 use crate::tensor::parse_tensor_shapes;
-
-
-
 
 #[derive(Debug)]
 struct Settings {
@@ -96,7 +90,7 @@ impl ObjectSubclass for ArrowDecoder {
             // sinkpad,
             // srcpad,
             settings: Mutex::new(Settings::default()),
-            state: Mutex::new(Some(State::default())),
+            state: Mutex::new(None),
         }
     }
 }
@@ -193,7 +187,7 @@ impl ElementImpl for ArrowDecoder {
             .unwrap();
 
             // let sinkcaps = gst::Caps::builder("other/flatbuf-tensor").build();
-            let sinkcaps = gst::Caps::builder("other/flatbuf-tensor").build();
+            let sinkcaps = gst::Caps::builder("other/flexbuf").build();
 
             let sink_pad_template = gst::PadTemplate::new(
                 "sink",
@@ -250,205 +244,105 @@ impl BaseTransformImpl for ArrowDecoder {
     // Configure basetransform so that we are never running in-place,
     // don't passthrough on same caps and also never call transform_ip in passthrough mode
     const MODE: gst_base::subclass::BaseTransformMode =
-        gst_base::subclass::BaseTransformMode::AlwaysInPlace;
+        gst_base::subclass::BaseTransformMode::NeverInPlace;
     const PASSTHROUGH_ON_SAME_CAPS: bool = false;
     const TRANSFORM_IP_ON_PASSTHROUGH: bool = false;
 
-    fn transform_ip(
+    // fn accept_caps
+    // fn before_transform
+    // fn copy_metadata
+    // https://github.com/google/flatbuffers/blob/master/samples/sample_flexbuffers_serde.rs
+    // * Map {
+    //     *   "num_tensors" : UInt32 | <The number of tensors>
+    //     *   "rate_n" : Int32 | <Framerate numerator>
+    //     *   "rate_d" : Int32 | <Framerate denominator>
+    //     *   "tensor_#": Vector | { String | <tensor name>,
+    //     *                          Int32 | <data type>,
+    //     *                          Vector | <tensor dimension>,
+    //     *                          Blob | <tensor data>
+    //     *                         }
+    //     * }
+    fn transform(
         &self,
         element: &Self::Type,
-        buf: &mut gst::BufferRef,
+        inbuf: &gst::Buffer,
+        outbuf: &mut gst::BufferRef,
     ) -> Result<gst::FlowSuccess, gst::FlowError> {
-        // let mut settings = *self.settings.lock().unwrap();
-        // settings.delay = cmp::min(settings.max_delay, settings.delay);
+        let readable_buf = inbuf
+            .clone()
+            .into_mapped_buffer_readable()
+            .map_err(|_| gst::FlowError::Error)?;
+        let root = Reader::get_root(readable_buf.as_slice()).unwrap();
+        let read_tensors = root.as_map();
+        let attrs: Vec<&str> = read_tensors.iter_keys().collect();
+        let expected_keys = [
+            "num_tensors",
+            "rate_n",
+            "rate_d",
+            "tensor_0",
+            "tensor_1",
+            "tensor_2",
+            "tensor_3",
+        ];
+
+        // ensure expected keys are present in incoming flatbuffer
+        for key in expected_keys {
+            if !attrs.contains(&key) {
+                gst::error!(
+                    CAT,
+                    "Received flatbuffer without required property: {}",
+                    key
+                )
+            }
+        }
+
+        // tensor_%d vectors have shape [tensor_name: String, data_type: i32, tensor_dimension: Vec, tensor_data: Blob]
+        let boxes_reader = read_tensors.idx("tensor_0").as_vector();
+        let boxes_d = boxes_reader.idx(3).as_blob().0.to_vec();
+        let boxes_s: Vec<usize> = boxes_reader
+            .idx(2)
+            .as_vector()
+            .iter()
+            .map(|el| el.as_u32() as usize)
+            .collect();
+
+        let boxes_t = Float32Tensor::try_new(
+            boxes_d.into(),
+            Some(boxes_s),
+            None,
+            Some(vec![
+                "bounding_boxes_x0",
+                "bounding_boxes_y0",
+                "bounding_boxes_x1",
+                "bounding_boxes_y1",
+            ]),
+        )
+        .unwrap();
+
+        let classes_reader = read_tensors.idx("tensor_1").as_vector();
+        let classes_t = classes_reader.idx(3).as_blob().0.to_vec();
+
+        let scores_reader = read_tensors.idx("tensor_2").as_vector();
+        let scores_t = scores_reader.idx(3).as_blob().0.to_vec();
 
         let mut state_guard = self.state.lock().unwrap();
         let state = state_guard.as_mut().ok_or(gst::FlowError::NotNegotiated)?;
 
-        let mut map = buf.map_writable().map_err(|_| gst::FlowError::Error)?;
-        let nnstreamer_tensors =
-            nnstreamer::flatbuf::root_as_tensors(map.as_slice()).map_err(|err| {
-                gst::element_error!(
-                    element,
-                    gst::CoreError::Failed,
-                    [&format!(
-                        "Failed to extract Tensor from flatbuffer {:?}",
-                        err
-                    )]
-                );
-                gst::FlowError::Error
-            })?;
-        let tensors = nnstreamer_tensors.tensor().unwrap();
-        let scores_tensor = tensors.get(2);
-        let scores_shape: Vec<usize> = scores_tensor
-            .dimension()
-            .unwrap()
-            .iter()
-            .map(|v| v as usize)
-            .collect();
-
-        // let arrow_tensor = arrow::tensor::Float32Tensor::try_new(
-        //     arrow::buffer::Buffer::from(scores_tensor.data().unwrap()),
-        //     Some(scores_shape),
-        //     None,
-        //     None,
-        // )
-        // .map_err(|err| {
-        //     gst::element_error!(
-        //         element,
-        //         gst::CoreError::Failed,
-        //         [&format!(
-        //             "Failed to convert flatbuffer tensor data to arrow Float32Tensor {:?}",
-        //             err
-        //         )]
-        //     );
-        //     gst::FlowError::Error
-        // })?;
-
-        // let mem = gst::memory::Memory::from_slice(arrow_tensor.data());
-        // let boxes_x0 =
-        //     Series::new_empty("bounding_boxes_x0", &polars::datatypes::DataType::Float32);
-        // let boxes_y0 =
-        //     Series::new_empty("bounding_boxes_y0", &polars::datatypes::DataType::Float32);
-        // let boxes_x1 =
-        //     Series::new_empty("bounding_boxes_x1", &polars::datatypes::DataType::Float32);
-        // let boxes_y1 =
-        //     Series::new_empty("bounding_boxes_y1", &polars::datatypes::DataType::Float32);
-
-        // let class = Series::new_empty("class_labels", &polars::datatypes::DataType::Float32);
-        // let scores = Series::new("class_scores", scores_tensor.data());
-        // let ts = Series::new_empty("ts", &polars::datatypes::DataType::Int64);
+        let ts = gst::util_get_timestamp().nseconds();
+        let num_tensors = read_tensors.idx("num_tensors").as_u32();
         // let df = DataFrame::new(vec![
-        //     ts, boxes_x0, boxes_y0, boxes_x1, boxes_y1, class, scores,
+        //     Series::new("ts", &[ts; num_tensors]),
+        //     Series::new("bounding_boxes_x0", boxes_x0),
+        //     Series::new("bounding_boxes_y0", boxes_y0),
+        //     Series::new("bounding_boxes_x1", boxes_x1),
+        //     Series::new("bounding_boxes_y1", boxes_y1),
+        //     Series::new("class_labels", classes_t),
+        //     Series::new("class_scores", scores_t),
         // ])
         // .unwrap();
 
-        // map.copy_from_slice(arrow_tensor.data());
-
-        gst::warning!(CAT, obj: element, "Wrote arrow_decoder buffer");
-        // match state.info.format() {
-        //     gst_audio::AUDIO_FORMAT_F64 => {
-        //         let data = map.as_mut_slice_of::<f64>().unwrap();
-        //         Self::process(data, state, &settings);
-        //     }
-        //     gst_audio::AUDIO_FORMAT_F32 => {
-        //         let data = map.as_mut_slice_of::<f32>().unwrap();
-        //         Self::process(data, state, &settings);
-        //     }
-        //     _ => return Err(gst::FlowError::NotNegotiated),
-        // }
-
         Ok(gst::FlowSuccess::Ok)
     }
-
-    // fn transform(
-    //     &self,
-    //     element: &Self::Type,
-    //     inbuf: &gst::Buffer,
-    //     outbuf: &mut gst::BufferRef,
-    // ) -> Result<gst::FlowSuccess, gst::FlowError> {
-    //     let mut state_guard = self.state.lock().unwrap();
-    //     let state = state_guard.as_mut().ok_or_else(|| {
-    //         gst::element_error!(element, gst::CoreError::Negotiation, ["Have no state yet"]);
-    //         gst::FlowError::NotNegotiated
-    //     })?;
-
-    //     let in_buffermap = inbuf.map_readable().or_else(|_| {
-    //         gst::element_error!(
-    //             element,
-    //             gst::CoreError::Failed,
-    //             ["Failed to map input buffer readable"]
-    //         );
-    //         Err(gst::FlowError::Error)
-    //     })?;
-
-    //     let nnstreamer_tensors = nnstreamer::flatbuf::root_as_tensors(in_buffermap.as_slice())
-    //         .map_err(|err| {
-    //             gst::element_error!(
-    //                 element,
-    //                 gst::CoreError::Failed,
-    //                 [&format!(
-    //                     "Failed to extract Tensor from flatbuffer {:?}",
-    //                     err
-    //                 )]
-    //             );
-    //             gst::FlowError::Error
-    //         })?;
-
-    //     let tensors = nnstreamer_tensors.tensor().unwrap();
-    //     let scores_tensor = tensors.get(2);
-    //     let scores_shape: Vec<usize> = scores_tensor
-    //         .dimension()
-    //         .unwrap()
-    //         .iter()
-    //         .map(|v| v as usize)
-    //         .collect();
-
-    //     let arrow_tensor = arrow::tensor::Float32Tensor::try_new(
-    //         arrow::buffer::Buffer::from(scores_tensor.data().unwrap()),
-    //         Some(scores_shape),
-    //         None,
-    //         None,
-    //     )
-    //     .map_err(|err| {
-    //         gst::element_error!(
-    //             element,
-    //             gst::CoreError::Failed,
-    //             [&format!(
-    //                 "Failed to convert flatbuffer tensor data to arrow Float32Tensor {:?}",
-    //                 err
-    //             )]
-    //         );
-    //         gst::FlowError::Error
-    //     })?;
-
-    //     // let score_array = arrow::datatypes::from(vec![1, 2, 3, 4, 5]);
-
-    //     // let field_scores = arrow::datatypes::Field::new("scores", arrow::datatypes::DataType::Float32, false);
-    //     // let schema = arrow::datatypes::Schema::new(vec![field_scores]);
-
-    //     // let batch = arrow::record_batch::RecordBatch::try_new(Arc::new(schema), vec![arrow_tensor]);
-
-    //     let mut buf_cursor = outbuf.as_cursor_writable().map_err(|err| {
-    //         gst::element_error!(
-    //             element,
-    //             gst::CoreError::Failed,
-    //             [&format!(
-    //                 "Failed to get writable outbuffer cursor {:?}",
-    //                 err
-    //             )]
-    //         );
-    //         gst::FlowError::Error
-    //     })?;
-    //     buf_cursor.write_all(arrow_tensor.data()).map_err(|err| {
-    //         gst::element_error!(
-    //             element,
-    //             gst::CoreError::Failed,
-    //             [&format!(
-    //                 "Failed to write arrow tensor data to buffer cursor {:?}",
-    //                 err
-    //             )]
-    //         );
-    //         gst::FlowError::Error
-    //     })?;
-
-    //     gst::warning!(CAT, obj: element, "Wrote arrow_decoder buffer");
-
-    //     // let tensor_type: ArrowPrimitiveType = match scores_tensor.type_() {
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_INT32 => arrow::datatypes::Int32Type,
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_UINT32 => arrow::tensor::UInt32Tensor,
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_INT16 => arrow::tensor::Int16Tensor,
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_UINT16 => arrow::tensor::UInt16Tensor,
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_INT8 => arrow::tensor::Int8Tensor,
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_UINT8 => arrow::tensor::UInt8Tensor,
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_FLOAT64 => arrow::tensor::Float64Tensor,
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_FLOAT32 => arrow::tensor::Float32Tensor,
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_INT64 => arrow::tensor::Int64Tensor,
-    //     //     nnstreamer::flatbuf::Tensor_type::NNS_UINT64 => arrow::tensor::UInt64Tensor,
-    //     // };
-
-    //     Ok(gst::FlowSuccess::Ok)
-    // }
 
     // Called for converting caps from one pad to another to account for any
     // changes in the media format this element is performing.
@@ -462,7 +356,7 @@ impl BaseTransformImpl for ArrowDecoder {
         filter: Option<&gst::Caps>,
     ) -> Option<gst::Caps> {
         let other_caps = if direction == gst::PadDirection::Src {
-            gst::Caps::builder("other/flatbuf-tensor").build()
+            gst::Caps::builder("other/flexbuf").build()
         } else {
             gst::Caps::builder("other/arrow").build()
         };

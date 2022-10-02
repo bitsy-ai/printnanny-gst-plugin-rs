@@ -1,6 +1,14 @@
 use gst::prelude::*;
+use gst::MessageView;
+
 use gstprintnanny::message_nnstreamer::nnstreamer;
+use polars::io::ipc::{IpcReader, IpcStreamReader};
+use polars::io::SerReader;
+use polars::prelude::*;
+use tempdir::TempDir;
+
 use std::fs;
+use std::fs::File;
 use std::path::PathBuf;
 
 fn init() {
@@ -16,126 +24,113 @@ fn init() {
 #[test]
 fn test_nnstreamer_callback() {
     init();
+    let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let model_path = base_path.join("data/model.tflite");
+
+    let num_detections = 40;
 
     let expected_buffers = 16;
     let pipeline = format!(
-        "videotestsrc num-buffers={} \
+        "videotestsrc num-buffers={expected_buffers} \
+        ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height},format=RGB \
+        ! videoscale \
+        ! videoconvert \
         ! tensor_converter \
-        ! tensor_decoder mode=custom-code option1=printnanny_decoder",
-        expected_buffers
+        ! capsfilter caps=other/tensors,num_tensors=1,format=static \
+        ! tensor_filter framework=tensorflow2-lite model={model_file} output=4:{num_detections}:1:1,{num_detections}:1:1:1,{num_detections}:1:1:1,1:1:1:1 outputname=detection_boxes,detection_classes,detection_scores,num_detections outputtype=float32,float32,float32,float32 \
+        ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder",
+        expected_buffers = expected_buffers,
+        num_detections = num_detections,
+        tensor_width = 320,
+        tensor_height = 320,
+        model_file = model_path.display()
     );
     let mut h = gst_check::Harness::new_parse(&pipeline);
     let bus = gst::Bus::new();
-    h.element().unwrap().set_bus(Some(&bus));
+    let element = h.element().unwrap();
+    element.set_bus(Some(&bus));
     h.play();
 
     let mut num_buffers = 0;
-    while let Some(_buffer) = h.pull_until_eos().unwrap() {
+    while let Some(buffer) = h.pull_until_eos().unwrap() {
+        let cursor = buffer.as_cursor_readable();
+        let df = IpcStreamReader::new(cursor)
+            .finish()
+            .expect("Failed to extract dataframe");
+
+        // dataframe should have 7 columns and num_detections rows
+        assert_eq!(df.shape(), (num_detections, 7));
+
+        println!("Pulled dataframe from buffer {:?}", df);
         num_buffers += 1;
     }
     assert_eq!(num_buffers, expected_buffers);
 }
 
-// #[test]
-// fn test_flatbuf_dataframe_decoder() {
-//     init();
-//     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-//     // let fixture = base_path.join("data/capture.flexbuf");
-//     let fixture = base_path.join("data/fixture0.flatbuf");
-//     // let fixture = base_path.join("data/fixture0_orig.mp4");
-//     let model_path = base_path.join("data/model.tflite");
+#[test]
+fn test_dataframe_filesink() {
+    init();
+    let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let tmp_dir = TempDir::new("test_dataframe_filesink").unwrap();
 
-//     // let pipeline = format!(
-//     //     "filesrc location={fixture} \
-//     //     ! decodebin \
-//     //     ! videoscale \
-//     //     ! videoconvert \
-//     //     ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height},format=RGB \
-//     //     ! tensor_converter \
-//     //     ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
-//     //     ! capsfilter caps=other/tensors,num_tensors=1,format=static \
-//     //     ! tensor_filter framework=tensorflow2-lite model={model_file} \
-//     //     ! tensor_decoder mode=flatbuf",
-//     //     fixture = fixture.display(),
-//     //     tensor_width = 320,
-//     //     tensor_height = 320,
-//     //     model_file = model_path.display(),
-//     // );
+    let dataframe_location = format!("{}/dataframe%05d.ipc", tmp_dir.path().display());
+    let model_path = base_path.join("data/model.tflite");
 
-//     let pipeline = format!(
-//         "filesrc location={fixture} \
-//         ! other/flatbuf-tensor \
-//         ! arrow_decoder name=printnannydec",
-//         fixture = fixture.display()
-//     );
+    let num_detections = 40;
 
-//     // let pipeline = format!(
-//     //     "filesrc location={fixture} ! testsink",
-//     //     fixture = fixture.display(),
-//     // );
-//     let mut h = gst_check::Harness::new_parse(&pipeline);
-//     let bus = gst::Bus::new();
-//     h.element().unwrap().set_bus(Some(&bus));
-//     h.play();
+    let expected_buffers = 16;
+    let pipeline_str = format!(
+        "videotestsrc num-buffers={expected_buffers} \
+        ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height},format=RGB \
+        ! videoscale \
+        ! videoconvert \
+        ! tensor_converter \
+        ! capsfilter caps=other/tensors,num_tensors=1,format=static \
+        ! tensor_filter framework=tensorflow2-lite model={model_file} output=4:{num_detections}:1:1,{num_detections}:1:1:1,{num_detections}:1:1:1,1:1:1:1 outputname=detection_boxes,detection_classes,detection_scores,num_detections outputtype=float32,float32,float32,float32 \
+        ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
+        ! dataframe_filesink location={dataframe_location}
+        ",
+        expected_buffers = expected_buffers,
+        num_detections = num_detections,
+        tensor_width = 320,
+        tensor_height = 320,
+        model_file = model_path.display(),
+    );
 
-//     // h.pull().unwrap();
-//     // Pull all buffers until EOS
-//     let mut num_buffers = 0;
-//     while let Some(_buffer) = h.pull_until_eos().unwrap() {
-//         num_buffers += 1;
-//     }
-//     assert_eq!(num_buffers, 5);
-// }
+    let pipeline = gst::parse_launch(&pipeline_str).expect("Failed to construct pipeline");
+    pipeline.set_state(gst::State::Playing).unwrap();
+    let bus = pipeline.bus().unwrap();
+    let mut events = vec![];
 
-// #[test]
-// fn test_flatbuf_arrow_decoder() {
-//     init();
-//     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-//     let fixture = base_path.join("data/fixture_0.mp4");
-//     let model_path = base_path.join("data/model.tflite");
+    loop {
+        let msg = bus.iter_timed(gst::ClockTime::NONE).next().unwrap();
 
-//     // let mut h1 = gst_check::Harness::new("arrow_decoder");
-//     let bin = gst::parse_bin_from_description(
-//         &format!(
-//             "filesrc location={fixture} ! decodebin ! queue \
-//             ! videoscale \
-//             ! videoconvert \
-//             ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height},format=RGB \
-//             ! tensor_converter \
-//             ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
-//             ! capsfilter caps=other/tensors,num_tensors=1,format=static \
-//             ! queue \
-//             ! tensor_filter framework=tensorflow2-lite model={model_file} \
-//             ! tensor_decoder mode=flexbuf \
-//             ! arrow_decoder name=printnannydec",
-//             fixture = fixture.display(),
-//             tensor_width = 320,
-//             tensor_height = 320,
-//             model_file = model_path.display(),
-//         ),
-//         false,
-//     )
-//     .unwrap();
+        match msg.view() {
+            MessageView::Error(_) | MessageView::Eos(..) => {
+                events.push(msg.clone());
+                break;
+            }
+            // check stream related messages
+            MessageView::StreamCollection(_) | MessageView::StreamsSelected(_) => {
+                events.push(msg.clone())
+            }
+            _ => {}
+        }
+    }
+    pipeline.set_state(gst::State::Null).unwrap();
 
-//     let srcpad = bin
-//         .by_name("printnannydec")
-//         .unwrap()
-//         .static_pad("src")
-//         .unwrap();
-//     // let _ = bin.add_pad(&gst::GhostPad::with_target(Some("src"), &srcpad).unwrap());
-//     let mut h = gst_check::Harness::with_element(&bin, None, Some("src"));
-//     h.play();
+    let pattern = format!("{}/*.ipc", tmp_dir.path().display());
 
-//     let buf = h.pull().unwrap();
-//     let frame = buf.into_mapped_buffer_readable().unwrap();
+    let paths = glob::glob(&pattern).expect("Failed to parse glob pattern");
 
-//     // h1.set_sink_caps_str("other/flexbuf");
+    let dataframes: Vec<LazyFrame> = paths
+        .map(|p| {
+            let p = p.unwrap();
+            let f = File::open(&p).expect("file not found");
+            IpcStreamReader::new(f).finish().unwrap().lazy()
+        })
+        .collect();
 
-//     // h1.play();
-
-//     // push flatbuffer data
-//     // let data = fs::read(&fixtures).unwrap();
-//     // let buf = gst::Buffer::from_slice(data);
-
-//     // assert_eq!(h1.push(buf), Ok(gst::FlowSuccess::Ok));
-// }
+    let df = concat(&dataframes, true, true).unwrap().collect().unwrap();
+    assert_eq!(df.shape(), (expected_buffers * num_detections, 7));
+}
