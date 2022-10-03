@@ -1,10 +1,12 @@
 use gst::glib;
+mod dataframe_agg;
 mod dataframe_filesink;
 pub mod nnstreamer;
 pub mod tensor;
 
 fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     dataframe_filesink::register(plugin)?;
+    dataframe_agg::register(plugin)?;
     nnstreamer::register_nnstreamer_callbacks();
     Ok(())
 }

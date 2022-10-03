@@ -1,6 +1,6 @@
 use byte_slice_cast::*;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::io::BufWriter;
 use std::{ptr, slice}; // or NativeEndian
@@ -16,7 +16,8 @@ use polars::export::arrow::io::ipc::write;
 
 use polars::prelude::*;
 
-use libc::{c_char, c_int, c_void, size_t};
+use libc::{c_char, c_float, c_int, c_void, size_t};
+
 const NNS_TENSOR_RANK_LIMIT: usize = 4;
 const NNS_TENSOR_SIZE_LIMIT: usize = 16;
 const NNS_TENSOR_SIZE_LIMIT_STR: &str = "16";
@@ -170,18 +171,24 @@ extern "C" fn printnanny_bb_dataframe_decoder(
     let num_boxes = df_config.info.info[0].tensor_dim[0];
     let num_detections: u32 = df_config.info.info[0].tensor_dim[1];
     let boxes = unsafe { slice::from_raw_parts(input_data[0].data as *mut u8, input_data[0].size) };
-    let boxes = boxes.as_slice_of::<f32>().unwrap().to_vec();
+    let boxes = boxes.as_slice_of::<c_float>().unwrap().to_vec();
     let boxes =
         ndarray::Array::from_shape_vec((num_detections as usize, num_boxes as usize), boxes)
             .expect("Failed to deserialize GstTensorMemory into detection_boxes ndarray");
     // create classes / labels ndarrays
     let classes =
-        unsafe { slice::from_raw_parts(input_data[0].data as *mut u8, input_data[1].size) };
-    let classes = classes.as_slice_of::<f32>().unwrap().to_vec();
+        unsafe { slice::from_raw_parts(input_data[1].data as *mut u8, input_data[1].size) };
+    let classes: Vec<i32> = classes
+        .as_slice_of::<c_float>()
+        .unwrap()
+        .to_vec()
+        .iter()
+        .map(|v| *v as i32)
+        .collect();
 
     let scores =
-        unsafe { slice::from_raw_parts(input_data[0].data as *mut u8, input_data[2].size) };
-    let scores = scores.as_slice_of::<f32>().unwrap().to_vec();
+        unsafe { slice::from_raw_parts(input_data[2].data as *mut u8, input_data[2].size) };
+    let scores = scores.as_slice_of::<c_float>().unwrap().to_vec();
 
     let mut df = df!(
         "detection_boxes_x0" => boxes.column(0).to_vec(),
