@@ -190,6 +190,9 @@ extern "C" fn printnanny_bb_dataframe_decoder(
         unsafe { slice::from_raw_parts(input_data[2].data as *mut u8, input_data[2].size) };
     let scores = scores.as_slice_of::<c_float>().unwrap().to_vec();
 
+    let ts_series = Series::new("ts", vec![ts; num_detections as usize])
+        .timestamp(TimeUnit::Nanoseconds)
+        .expect("Failed to parse nanosecond timestamp");
     let mut df = df!(
         "detection_boxes_x0" => boxes.column(0).to_vec(),
         "detection_boxes_y0" => boxes.column(1).to_vec(),
@@ -197,7 +200,7 @@ extern "C" fn printnanny_bb_dataframe_decoder(
         "detection_boxes_y1" => boxes.column(3).to_vec(),
         "detection_classes" => classes,
         "detection_scores" => scores,
-        "ts" => vec![ts; num_detections as usize]
+        "ts" => ts_series,
     )
     .expect("Failed to initialize dataframe");
 

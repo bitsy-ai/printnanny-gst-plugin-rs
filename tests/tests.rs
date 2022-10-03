@@ -4,7 +4,6 @@ use gst::MessageView;
 use polars::io::ipc::{IpcReader, IpcStreamReader};
 use polars::io::SerReader;
 use polars::prelude::*;
-use tempdir::TempDir;
 
 use std::fs;
 use std::fs::File;
@@ -23,8 +22,8 @@ fn init() {
 #[test]
 fn test_nnstreamer_callback() {
     init();
-    let tmp_dir: TempDir = TempDir::new("printnanny-gst-plugin").unwrap();
     let base_path: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let tmp_dir = base_path.join(".tmp");
     let model_path: PathBuf = base_path.join("data/model.tflite");
 
     let num_detections = 40;
