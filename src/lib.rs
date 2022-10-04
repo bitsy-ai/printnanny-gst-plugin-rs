@@ -1,6 +1,9 @@
 use gst::glib;
 mod dataframe_agg;
 mod dataframe_filesink;
+
+pub mod error;
+pub mod ipc;
 pub mod nnstreamer;
 pub mod tensor;
 

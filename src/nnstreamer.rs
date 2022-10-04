@@ -100,6 +100,8 @@ extern "C" fn printnanny_bb_dataframe_decoder(
     data: libc::c_void,
     out_buf: *mut gst_sys::GstBuffer,
 ) -> i32 {
+    // timestamp value is GstClock time (relative to pipeline PLAYING event), not system clock time
+    let ts = gst::util_get_timestamp().nseconds();
     let num_tensors = unsafe { (*config).info.num_tensors };
     if num_tensors != 4 {
         gst::error!(
@@ -164,8 +166,6 @@ extern "C" fn printnanny_bb_dataframe_decoder(
         input_data,
         df_config.info
     );
-
-    let ts = gst::util_get_timestamp().nseconds();
 
     // flatten bounding boxes into x0, y0 x1, y1 columns
     let num_boxes = df_config.info.info[0].tensor_dim[0];

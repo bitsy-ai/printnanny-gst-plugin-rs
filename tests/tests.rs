@@ -157,13 +157,12 @@ fn test_dataframe_agg() {
         ! queue \
         ! tensor_filter framework=tensorflow2-lite model={model_file} output=4:{num_detections}:1:1,{num_detections}:1:1:1,{num_detections}:1:1:1,1:1:1:1 outputname=detection_boxes,detection_classes,detection_scores,num_detections outputtype=float32,float32,float32,float32 \
         ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
-        ! dataframe_filesink location={dataframe_location}",
+        ! dataframe_agg",
         fixture = fixture.display(),
         num_detections = num_detections,
         tensor_width = 320,
         tensor_height = 320,
         model_file = model_path.display(),
-        dataframe_location = dataframe_location
     );
 
     let pipeline = gst::parse_launch(&pipeline_str).expect("Failed to construct pipeline");
