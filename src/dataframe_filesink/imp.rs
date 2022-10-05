@@ -63,7 +63,7 @@ impl ObjectSubclass for DataframeFileSink {
     type Type = super::DataframeFileSink;
     type ParentType = gst::Bin;
 
-        // Called when a new instance is to be created. We need to return an instance
+    // Called when a new instance is to be created. We need to return an instance
     // of our struct here and also get the class struct passed in case it's needed
     fn with_class(klass: &Self::Class) -> Self {
         // Create our two ghostpads from the templates that were registered with
@@ -76,7 +76,6 @@ impl ObjectSubclass for DataframeFileSink {
         // let templ = klass.pad_template("src").unwrap();
         // let srcpad = gst::GhostPad::from_template(&templ, Some("src"));
 
-        // Create the progressreport element.
         let multifilesink = gst::ElementFactory::make("multifilesink", Some("dataframe_multifilesink")).unwrap();
 
         // Return an instance of our struct
@@ -190,95 +189,14 @@ impl ObjectImpl for DataframeFileSink {
         }
     }
 
-    // fn signals() -> &'static [glib::subclass::Signal] {
-    //     static SIGNALS: Lazy<Vec<glib::subclass::Signal>> = Lazy::new(|| {
-    //         vec![
-    //             // glib::subclass::Signal::builder(SIGNAL_GET_PLAYLIST_STREAM)
-    //             //     .param_types([String::static_type()])
-    //             //     .return_type::<gio::OutputStream>()
-    //             //     .class_handler(|_, args| {
-    //             //         let element = args[0]
-    //             //             .get::<super::HlsSink3>()
-    //             //             .expect("playlist-stream signal arg");
-    //             //         let playlist_location =
-    //             //             args[1].get::<String>().expect("playlist-stream signal arg");
-    //             //         let hlssink3 = element.imp();
-
-    //             //         Some(
-    //             //             hlssink3
-    //             //                 .new_file_stream(&element, &playlist_location)
-    //             //                 .ok()?
-    //             //                 .to_value(),
-    //             //         )
-    //             //     })
-    //             //     .accumulator(|_hint, ret, value| {
-    //             //         // First signal handler wins
-    //             //         *ret = value.clone();
-    //             //         false
-    //             //     })
-    //             //     .build(),
-    //             // glib::subclass::Signal::builder(SIGNAL_GET_FRAGMENT_STREAM)
-    //             //     .param_types([String::static_type()])
-    //             //     .return_type::<gio::OutputStream>()
-    //             //     .class_handler(|_, args| {
-    //             //         let element = args[0]
-    //             //             .get::<super::HlsSink3>()
-    //             //             .expect("fragment-stream signal arg");
-    //             //         let fragment_location =
-    //             //             args[1].get::<String>().expect("fragment-stream signal arg");
-    //             //         let hlssink3 = element.imp();
-
-    //             //         Some(
-    //             //             hlssink3
-    //             //                 .new_file_stream(&element, &fragment_location)
-    //             //                 .ok()?
-    //             //                 .to_value(),
-    //             //         )
-    //             //     })
-    //             //     .accumulator(|_hint, ret, value| {
-    //             //         // First signal handler wins
-    //             //         *ret = value.clone();
-    //             //         false
-    //             //     })
-    //             //     .build(),
-    //             // glib::subclass::Signal::builder(SIGNAL_DELETE_FRAGMENT)
-    //             //     .param_types([String::static_type()])
-    //             //     .return_type::<bool>()
-    //             //     .class_handler(|_, args| {
-    //             //         let element = args[0].get::<super::HlsSink3>().expect("signal arg");
-    //             //         let fragment_location = args[1].get::<String>().expect("signal arg");
-    //             //         let hlssink3 = element.imp();
-
-    //             //         hlssink3.delete_fragment(&element, &fragment_location);
-    //             //         Some(true.to_value())
-    //             //     })
-    //             //     .accumulator(|_hint, ret, value| {
-    //             //         // First signal handler wins
-    //             //         *ret = value.clone();
-    //             //         false
-    //             //     })
-    //             //     .build(),
-    //         ]
-    //     });
-
-    //     SIGNALS.as_ref()
-    // }
-
     fn constructed(&self, obj: &Self::Type) {
         self.parent_constructed(obj);
 
-        // obj.set_element_flags(gst::ElementFlags::SINK);
-        // obj.set_suppressed_flags(gst::ElementFlags::SINK | gst::ElementFlags::SOURCE);
-
-
         obj.add(&self.multifilesink).unwrap();
-
-
         // only one ghostpad is needed here, since a sink element has no srcpad
         self.sinkpad
             .set_target(Some(&self.multifilesink.static_pad("sink").unwrap()))
             .unwrap();
-
         // And finally add the ghostpads to the bin.
         obj.add_pad(&self.sinkpad).unwrap();
     }
@@ -302,16 +220,8 @@ impl ElementImpl for DataframeFileSink {
 
     fn pad_templates() -> &'static [gst::PadTemplate] {
         static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
-            // Our element can accept any possible caps on both pads
+            // Our element can accept any possible caps
             let caps = gst::Caps::new_any();
-            // let src_pad_template = gst::PadTemplate::new(
-            //     "src",
-            //     gst::PadDirection::Src,
-            //     gst::PadPresence::Always,
-            //     &caps,
-            // )
-            // .unwrap();
-
             let sink_pad_template = gst::PadTemplate::new(
                 "sink",
                 gst::PadDirection::Sink,

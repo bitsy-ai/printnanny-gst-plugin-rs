@@ -5,14 +5,14 @@ mod imp;
 
 // The public Rust wrapper type for our element
 glib::wrapper! {
-    pub struct DataframeFileSink(ObjectSubclass<imp::DataframeFileSink>) @extends gst::Bin, gst::Element, gst::Object;
+    pub struct DataframeAgg(ObjectSubclass<imp::DataframeAgg>) @extends gst::Bin, gst::Element, gst::Object;
 }
 
 pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     gst::Element::register(
         Some(plugin),
-        "dataframe_filesink",
+        "dataframe_agg",
         gst::Rank::None,
-        DataframeFileSink::static_type(),
+        DataframeAgg::static_type(),
     )
 }

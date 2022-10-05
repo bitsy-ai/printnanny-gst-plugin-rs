@@ -1,18 +1,15 @@
 use gst::glib;
-mod arrow_decoder;
-mod dataframe_decoder;
+mod dataframe_agg;
 mod dataframe_filesink;
+
+pub mod error;
+pub mod ipc;
 pub mod nnstreamer;
 pub mod tensor;
 
-#[allow(non_snake_case)]
-#[path = "../target/flatbuffers/nnstreamer_generated.rs"]
-pub mod message_nnstreamer;
-
 fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
-    arrow_decoder::register(&plugin)?;
-    dataframe_decoder::register(plugin)?;
     dataframe_filesink::register(plugin)?;
+    dataframe_agg::register(plugin)?;
     nnstreamer::register_nnstreamer_callbacks();
     Ok(())
 }
