@@ -98,7 +98,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        channel: [stable, beta]
+        channel: [nightly]
         target:
           # WASM, off by default as most rust projects aren't compatible yet.
           # - wasm32-unknown-emscripten
