@@ -8,10 +8,10 @@ inherit cargo
 # how to get printnanny-gst-plugin could be as easy as but default to a git checkout:
 # SRC_URI += "crate://crates.io/printnanny-gst-plugin/0.1.0"
 SRC_URI += "git://git@github.com/bitsy-ai/printnanny-gst-plugin-rs.git;protocol=ssh;nobranch=1;branch=main"
-SRCREV = "a8af63944c29a193d527e9fbd67d7821d9b82af9"
+SRCREV = "7deecef49533e501c317a2847c304d30d213a835"
 S = "${WORKDIR}/git"
 CARGO_SRC_DIR = ""
-PV:append = ".AUTOINC+a8af63944c"
+PV:append = ".AUTOINC+7deecef495"
 
 # please note if you have entries that do not begin with crate://
 # you must change them to how that package can be fetched
@@ -371,12 +371,12 @@ EXTRA_OECARGO_PATHS += "${WORKDIR}/gstreamer-video-sys"
 
 # FIXME: update generateme with the real MD5 of the license file
 LIC_FILES_CHKSUM = " \
-    file://AGPL-3.0-or-later;md5=generateme \
+    file://LICENSE;md5=502f097d09aa7db676cbf9ab2d15d451 \
 "
 
 SUMMARY = "PrintNanny Gstreamer Plugins"
 HOMEPAGE = "https://github.com/bitsy-ai/printnanny-gst-plugin-rs/"
-LICENSE = "AGPL-3.0-or-later"
+LICENSE = "LICENSE"
 
 # includes this file if it exists but does not fail
 # this is useful for anything you may want to override from
