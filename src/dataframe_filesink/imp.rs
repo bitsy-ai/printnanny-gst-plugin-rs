@@ -47,7 +47,6 @@ impl Default for Settings {
     }
 }
 
-#[derive(Clone)]
 pub struct DataframeFileSink {
     multifilesink: gst::Element,
     settings: Arc<Mutex<Settings>>,
@@ -128,7 +127,6 @@ impl ObjectImpl for DataframeFileSink {
 
     fn set_property(
         &self,
-        _obj: &Self::Type,
         _id: usize,
         value: &glib::Value,
         pspec: &glib::ParamSpec,
@@ -178,7 +176,7 @@ impl ObjectImpl for DataframeFileSink {
         };
     }
 
-    fn property(&self, _obj: &Self::Type, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+    fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
         let settings = self.settings.lock().unwrap();
         match pspec.name() {
             "location" => settings.location.to_value(),
@@ -190,9 +188,10 @@ impl ObjectImpl for DataframeFileSink {
         }
     }
 
-    fn constructed(&self, obj: &Self::Type) {
-        self.parent_constructed(obj);
+    fn constructed(&self) {
+        self.parent_constructed();
 
+        let obj = self.instance();
         obj.add(&self.multifilesink).unwrap();
         // only one ghostpad is needed here, since a sink element has no srcpad
         self.sinkpad

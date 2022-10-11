@@ -77,13 +77,7 @@ impl ObjectImpl for NatsSink {
         PROPERTIES.as_ref()
     }
 
-    fn set_property(
-        &self,
-        _obj: &Self::Type,
-        _id: usize,
-        value: &glib::Value,
-        pspec: &glib::ParamSpec,
-    ) {
+    fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
         let mut settings = self.settings.lock().unwrap();
 
         match pspec.name() {
@@ -97,7 +91,7 @@ impl ObjectImpl for NatsSink {
         };
     }
 
-    fn property(&self, _obj: &Self::Type, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+    fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
         let settings = self.settings.lock().unwrap();
 
         match pspec.name() {
@@ -141,11 +135,13 @@ impl ElementImpl for NatsSink {
 }
 
 impl BaseSinkImpl for NatsSink {
-    fn start(&self, element: &Self::Type) -> Result<(), gst::ErrorMessage> {
+    fn start(&self) -> Result<(), gst::ErrorMessage> {
         let mut state = self.state.lock().unwrap();
         if let State::Started { .. } = *state {
             unreachable!("NatsSink already started");
         }
+
+        let element = self.instance();
 
         let settings = self.settings.lock().unwrap();
 
@@ -172,8 +168,10 @@ impl BaseSinkImpl for NatsSink {
         Ok(())
     }
 
-    fn stop(&self, element: &Self::Type) -> Result<(), gst::ErrorMessage> {
+    fn stop(&self) -> Result<(), gst::ErrorMessage> {
         let mut state = self.state.lock().unwrap();
+
+        let element = self.instance();
 
         let nc = match *state {
             State::Started { ref mut nc } => nc,
@@ -204,13 +202,11 @@ impl BaseSinkImpl for NatsSink {
         Ok(())
     }
 
-    fn render(
-        &self,
-        element: &Self::Type,
-        buffer: &gst::Buffer,
-    ) -> Result<gst::FlowSuccess, gst::FlowError> {
+    fn render(&self, buffer: &gst::Buffer) -> Result<gst::FlowSuccess, gst::FlowError> {
         let mut state = self.state.lock().unwrap();
         let settings = self.settings.lock().unwrap();
+
+        let element = self.instance();
 
         let nc = match *state {
             State::Started { ref mut nc } => nc,
