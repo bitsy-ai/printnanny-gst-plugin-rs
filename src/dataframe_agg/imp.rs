@@ -7,7 +7,8 @@ use gst::subclass::prelude::*;
 use once_cell::sync::Lazy;
 use polars::prelude::*;
 
-use crate::ipc::dataframe_to_arrow_streaming_ipc_message;
+use super::DataframeOutputType;
+use crate::ipc::{dataframe_to_arrow_streaming_ipc_message, dataframe_to_json_bytearray};
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -17,8 +18,7 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     )
 });
 
-const SIGNAL_NOZZLE_OK: &str = "nozzle-ok";
-const SIGNAL_NOZZLE_UNKNOWN: &str = "nozzle-unknown";
+const DEFAULT_OUTPUT_TYPE: DataframeOutputType = DataframeOutputType::ArrowStreamingIpc;
 
 const DEFAULT_MAX_SIZE_DURATION: &str = "30s";
 const DEFAULT_MAX_SIZE_BUFFERS: u64 = 900; // approx 1 minute of buffer frames @ 15fps
@@ -62,6 +62,7 @@ impl Default for State {
 struct Settings {
     filter_threshold: f32,
     ddof: u8,
+    output_type: DataframeOutputType,
     max_size_duration: String,
     max_size_buffers: u64,
     window_interval: String,
@@ -75,6 +76,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             ddof: DEFAULT_DDOF,
+            output_type: DEFAULT_OUTPUT_TYPE,
             filter_threshold: DEFAULT_SCORE_THRESHOLD,
             max_size_duration: DEFAULT_MAX_SIZE_DURATION.into(),
             max_size_buffers: DEFAULT_MAX_SIZE_BUFFERS,
@@ -107,7 +109,12 @@ impl DataframeAgg {
     //
     // See the documentation of gst::Event and gst::EventRef to see what can be done with
     // events, and especially the gst::EventView type for inspecting events.
-    fn sink_event(&self, pad: &gst::Pad, element: &super::DataframeAgg, event: gst::Event) -> bool {
+    fn sink_event(
+        &self,
+        pad: &gst::Pad,
+        _element: &super::DataframeAgg,
+        event: gst::Event,
+    ) -> bool {
         gst::log!(CAT, obj: pad, "Handling event {:?}", event);
         self.srcpad.push_event(event)
     }
@@ -120,7 +127,7 @@ impl DataframeAgg {
     //
     // See the documentation of gst::Event and gst::EventRef to see what can be done with
     // events, and especially the gst::EventView type for inspecting events.
-    fn src_event(&self, pad: &gst::Pad, element: &super::DataframeAgg, event: gst::Event) -> bool {
+    fn src_event(&self, pad: &gst::Pad, _element: &super::DataframeAgg, event: gst::Event) -> bool {
         gst::log!(CAT, obj: pad, "Handling event {:?}", event);
         self.sinkpad.push_event(event)
     }
@@ -137,7 +144,7 @@ impl DataframeAgg {
     fn src_query(
         &self,
         pad: &gst::Pad,
-        element: &super::DataframeAgg,
+        _element: &super::DataframeAgg,
         query: &mut gst::QueryRef,
     ) -> bool {
         gst::log!(CAT, obj: pad, "Handling query {:?}", query);
@@ -156,7 +163,7 @@ impl DataframeAgg {
     fn sink_query(
         &self,
         pad: &gst::Pad,
-        element: &super::DataframeAgg,
+        _element: &super::DataframeAgg,
         query: &mut gst::QueryRef,
     ) -> bool {
         gst::log!(CAT, obj: pad, "Handling query {:?}", query);
@@ -172,7 +179,7 @@ impl DataframeAgg {
         gst::log!(CAT, obj: pad, "Handling buffer {:?}", buffer);
 
         let mut state = self.state.lock().unwrap();
-        let mut settings = self.settings.lock().unwrap();
+        let settings = self.settings.lock().unwrap();
 
         let cursor = buffer.into_cursor_readable();
 
@@ -201,11 +208,11 @@ impl DataframeAgg {
             truncate: false,
             include_boundaries: true,
         };
+        println!("{:?}", &state.dataframe.clone().collect());
 
         let mut windowed_df = state
             .dataframe
             .clone()
-            .filter(col("detection_classes").eq(0))
             .filter(col("detection_scores").gt(settings.filter_threshold))
             .filter(col("ts").gt_eq(col("ts").max() - lit(max_duration.nanoseconds())))
             .sort(
@@ -288,17 +295,30 @@ impl DataframeAgg {
                 gst::FlowError::Error
             })?;
 
-        let arrow_msg =
-            dataframe_to_arrow_streaming_ipc_message(&mut windowed_df, None).map_err(|err| {
-                gst::element_error!(
-                    element,
-                    gst::StreamError::Decode,
-                    ["Failed to serialize arrow ipc streaming msg: {:?}", err]
-                );
-                gst::FlowError::Error
-            })?;
+        let output_buffer = match settings.output_type {
+            DataframeOutputType::ArrowStreamingIpc => {
+                dataframe_to_arrow_streaming_ipc_message(&mut windowed_df, None).map_err(|err| {
+                    gst::element_error!(
+                        element,
+                        gst::StreamError::Decode,
+                        ["Failed to serialize arrow ipc streaming msg: {:?}", err]
+                    );
+                    gst::FlowError::Error
+                })?
+            }
+            DataframeOutputType::Json => {
+                dataframe_to_json_bytearray(&mut windowed_df).map_err(|err| {
+                    gst::element_error!(
+                        element,
+                        gst::StreamError::Decode,
+                        ["Failed to serialize json from dataframe: {:?}", err]
+                    );
+                    gst::FlowError::Error
+                })?
+            }
+        };
 
-        self.srcpad.push(gst::Buffer::from_slice(arrow_msg))
+        self.srcpad.push(gst::Buffer::from_slice(output_buffer))
     }
 }
 
@@ -417,6 +437,10 @@ impl ObjectImpl for DataframeAgg {
                     .blurb("Delta degrees of freedom modifier, used in standard deviation and variance calculations")
                     .default_value(DEFAULT_DDOF as u32)
                     .build(),
+                glib::ParamSpecEnum::builder::<DataframeOutputType>("output-type", DEFAULT_OUTPUT_TYPE)
+                    .nick("Output Format Type")
+                    .blurb("Format of output buffer")
+                    .build(),
             ]
         });
 
@@ -427,6 +451,7 @@ impl ObjectImpl for DataframeAgg {
         let settings = self.settings.lock().unwrap();
         match pspec.name() {
             "ddof" => settings.ddof.to_value(),
+            "output-type" => settings.output_type.to_value(),
             "filter-threshold" => settings.filter_threshold.to_value(),
             "max-size-buffers" => settings.max_size_buffers.to_value(),
             "max-size-duration" => settings.max_size_duration.to_value(),
@@ -451,6 +476,11 @@ impl ObjectImpl for DataframeAgg {
         match pspec.name() {
             "ddof" => {
                 settings.ddof = value.get::<u8>().expect("type checked upstream");
+            }
+            "output-type" => {
+                settings.output_type = value
+                    .get::<DataframeOutputType>()
+                    .expect("type checked upstream");
             }
             "filter-threshold" => {
                 settings.filter_threshold = value.get::<f32>().expect("type checked upstream");
