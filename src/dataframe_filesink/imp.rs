@@ -10,6 +10,8 @@
 use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
+use gst_base::subclass::prelude::*;
+
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
 
