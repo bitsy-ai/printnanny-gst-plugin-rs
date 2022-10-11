@@ -1,5 +1,13 @@
 .tmp
 data
+
+/target
+.tmp
+
+*.db*
+env/
+target/
+.vscode
 # Created by https://www.toptal.com/developers/gitignore/api/linux,macos,rust
 # Edit at https://www.toptal.com/developers/gitignore?templates=linux,macos,rust
 
