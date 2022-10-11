@@ -166,7 +166,7 @@ impl BaseSinkImpl for NatsSink {
             &settings.nats_address
         );
 
-        *state = State::Started { nc: nc };
+        *state = State::Started { nc };
         gst::info!(CAT, obj: element, "Started");
 
         Ok(())

@@ -145,7 +145,7 @@ impl PipelineApp {
                 "filesrc location={input_path} do-timestamp=true",
                 input_path = self.input_path
             ),
-            VideoStreamSource::Device => format!("libcamerasrc"),
+            VideoStreamSource::Device => "libcamerasrc".to_string(),
         }
     }
 
