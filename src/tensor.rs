@@ -24,10 +24,7 @@ pub enum TensorError {
 
 // Parse a single tensor shape, with dimensions separated by ":" symbol, for example "40:1:1:4" -> [40,1,1,4]
 pub fn parse_tensor_shape(tensor_shape: &str) -> Result<Vec<u32>, ParseIntError> {
-    tensor_shape
-        .split(':')
-        .map(|s| Ok(s.parse::<u32>()?))
-        .collect()
+    tensor_shape.split(':').map(|s| s.parse::<u32>()).collect()
 }
 
 // Parse a single tensor type from string, returning Arrow data type
@@ -45,7 +42,7 @@ pub fn parse_tensor_type(tensor_type: &str) -> datatypes::DataType {
 // Parse a comma-separated String of tensor types
 pub fn parse_tensor_types(tensor_types: &str) -> Result<Vec<datatypes::DataType>, TensorError> {
     let parsed: Vec<&str> = tensor_types.split(',').collect();
-    if parsed.len() > 0 {
+    if !parsed.is_empty() {
         Ok(parsed.iter().map(|t| parse_tensor_type(t)).collect())
     } else {
         Err(TensorError::InvalidType {
@@ -57,8 +54,8 @@ pub fn parse_tensor_types(tensor_types: &str) -> Result<Vec<datatypes::DataType>
 // Parse a comma-separated String of tensor shapes
 pub fn parse_tensor_shapes(tensor_shapes: &str) -> Result<(usize, Vec<Vec<u32>>), TensorError> {
     // split individual tensor shapes
-    let shape_per_tensor: Vec<&str> = tensor_shapes.split(",").collect();
-    if shape_per_tensor.len() > 0 {
+    let shape_per_tensor: Vec<&str> = tensor_shapes.split(',').collect();
+    if !shape_per_tensor.is_empty() {
         let result: Result<Vec<Vec<u32>>, TensorError> = shape_per_tensor
             .iter()
             .map(|t| Ok(parse_tensor_shape(t)?))
@@ -73,41 +70,8 @@ pub fn parse_tensor_shapes(tensor_shapes: &str) -> Result<(usize, Vec<Vec<u32>>)
 
 // Parse comma-separated String of tensor names
 pub fn parse_tensor_names(tensor_names: &str) -> Vec<String> {
-    tensor_names.split(",").map(|s| s.to_string()).collect()
+    tensor_names.split(',').map(|s| s.to_string()).collect()
 }
-
-// pub fn build_arrow_tensor<T>(tensor_shape: Vec<T>, ) -> Result<(), TensorError>{
-//     match T {
-//         u32 => {
-//             let
-//         }
-//     }
-
-// }
-
-// parse input tensor schema
-// pub fn parse_tensor_schema(
-//     tensor_shapes: &str,
-//     tensor_types: &str,
-//     tensor_names: &str,
-// ) -> Result<datatypes::Tens, TensorError> {
-//     let mut fields: Vec<datatypes::Field> = vec![];
-
-//     let parsed_shapes = parse_tensor_shapes(&tensor_shapes)?;
-//     let parsed_types = parse_tensor_types(tensor_types)?;
-//     let tensor_names = parse_tensor_names(tensor_names);
-
-//     // ensure tensor shapes / types / names are the same length
-//     if parsed_shapes.len() == parsed_types.len() && parsed_types.len() == tensor_names.len(){
-//         for (i, el) in parsed_shapes.iter().enumerate() {
-
-//         }
-//         datatypes::Schema::new()
-
-//     } else {
-//         Err(TensorError::TensorLength { tensor_shapes: tensor_shapes.into(), tensor_types: tensor_types.into(), tensor_names: tensor_names.into()})
-//     }
-// }
 
 #[cfg(test)]
 mod tests {

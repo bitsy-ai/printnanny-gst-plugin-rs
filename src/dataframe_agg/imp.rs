@@ -89,7 +89,6 @@ impl Default for Settings {
     }
 }
 
-#[derive(Clone)]
 pub struct DataframeAgg {
     settings: Arc<Mutex<Settings>>,
     state: Arc<Mutex<State>>,
@@ -98,7 +97,7 @@ pub struct DataframeAgg {
 }
 
 impl DataframeAgg {
-    fn drain(&self) -> Result<(), gst::ErrorMessage> {
+    fn _drain(&self) -> Result<(), gst::ErrorMessage> {
         Ok(())
     }
 
@@ -109,12 +108,7 @@ impl DataframeAgg {
     //
     // See the documentation of gst::Event and gst::EventRef to see what can be done with
     // events, and especially the gst::EventView type for inspecting events.
-    fn sink_event(
-        &self,
-        pad: &gst::Pad,
-        _element: &super::DataframeAgg,
-        event: gst::Event,
-    ) -> bool {
+    fn sink_event(&self, pad: &gst::Pad, event: gst::Event) -> bool {
         gst::log!(CAT, obj: pad, "Handling event {:?}", event);
         self.srcpad.push_event(event)
     }
@@ -127,7 +121,7 @@ impl DataframeAgg {
     //
     // See the documentation of gst::Event and gst::EventRef to see what can be done with
     // events, and especially the gst::EventView type for inspecting events.
-    fn src_event(&self, pad: &gst::Pad, _element: &super::DataframeAgg, event: gst::Event) -> bool {
+    fn src_event(&self, pad: &gst::Pad, event: gst::Event) -> bool {
         gst::log!(CAT, obj: pad, "Handling event {:?}", event);
         self.sinkpad.push_event(event)
     }
@@ -141,12 +135,7 @@ impl DataframeAgg {
     //
     // See the documentation of gst::Query and gst::QueryRef to see what can be done with
     // queries, and especially the gst::QueryView type for inspecting and modifying queries.
-    fn src_query(
-        &self,
-        pad: &gst::Pad,
-        _element: &super::DataframeAgg,
-        query: &mut gst::QueryRef,
-    ) -> bool {
+    fn src_query(&self, pad: &gst::Pad, query: &mut gst::QueryRef) -> bool {
         gst::log!(CAT, obj: pad, "Handling query {:?}", query);
         self.sinkpad.peer_query(query)
     }
@@ -160,12 +149,7 @@ impl DataframeAgg {
     //
     // See the documentation of gst::Query and gst::QueryRef to see what can be done with
     // queries, and especially the gst::QueryView type for inspecting and modifying queries.
-    fn sink_query(
-        &self,
-        pad: &gst::Pad,
-        _element: &super::DataframeAgg,
-        query: &mut gst::QueryRef,
-    ) -> bool {
+    fn sink_query(&self, pad: &gst::Pad, query: &mut gst::QueryRef) -> bool {
         gst::log!(CAT, obj: pad, "Handling query {:?}", query);
         self.srcpad.peer_query(query)
     }
@@ -173,7 +157,6 @@ impl DataframeAgg {
     fn sink_chain(
         &self,
         pad: &gst::Pad,
-        element: &super::DataframeAgg,
         buffer: gst::Buffer,
     ) -> Result<gst::FlowSuccess, gst::FlowError> {
         gst::log!(CAT, obj: pad, "Handling buffer {:?}", buffer);
@@ -191,11 +174,7 @@ impl DataframeAgg {
 
         let max_duration = Duration::parse(&settings.max_size_duration);
         state.dataframe = concat(vec![state.dataframe.clone(), df], true, true).map_err(|err| {
-            gst::element_error!(
-                element,
-                gst::ResourceError::Read,
-                ["Failed to merge dataframes: {}", err]
-            );
+            gst::error!(CAT, "Failed to merge dataframes: {}", err);
             gst::FlowError::Error
         })?;
 
@@ -287,32 +266,25 @@ impl DataframeAgg {
             ])
             .collect()
             .map_err(|err| {
-                gst::element_error!(
-                    element,
-                    gst::StreamError::Decode,
-                    ["Failed window/aggregate dataframes {}", err]
-                );
+                gst::error!(CAT, "Failed window/aggregate dataframes {}", err);
                 gst::FlowError::Error
             })?;
 
         let output_buffer = match settings.output_type {
             DataframeOutputType::ArrowStreamingIpc => {
                 dataframe_to_arrow_streaming_ipc_message(&mut windowed_df, None).map_err(|err| {
-                    gst::element_error!(
-                        element,
-                        gst::StreamError::Decode,
-                        ["Failed to serialize arrow ipc streaming msg: {:?}", err]
+                    gst::error!(
+                        CAT,
+                        "Failed to serialize arrow ipc streaming msg: {:?}",
+                        err
                     );
+
                     gst::FlowError::Error
                 })?
             }
             DataframeOutputType::Json => {
                 dataframe_to_json_bytearray(&mut windowed_df).map_err(|err| {
-                    gst::element_error!(
-                        element,
-                        gst::StreamError::Decode,
-                        ["Failed to serialize json from dataframe: {:?}", err]
-                    );
+                    gst::error!(CAT, "Failed to serialize json from dataframe: {:?}", err);
                     gst::FlowError::Error
                 })?
             }
@@ -337,14 +309,14 @@ impl ObjectSubclass for DataframeAgg {
                 DataframeAgg::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.src_event(pad, element, event),
+                    |element| element.src_event(pad, event),
                 )
             })
             .query_function(|pad, parent, query| {
                 DataframeAgg::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.src_query(pad, element, query),
+                    |element| element.src_query(pad, query),
                 )
             })
             .build();
@@ -355,21 +327,21 @@ impl ObjectSubclass for DataframeAgg {
                 DataframeAgg::catch_panic_pad_function(
                     parent,
                     || Err(gst::FlowError::Error),
-                    |parse, element| parse.sink_chain(pad, element, buffer),
+                    |element| element.sink_chain(pad, buffer),
                 )
             })
             .event_function(|pad, parent, event| {
                 DataframeAgg::catch_panic_pad_function(
                     parent,
                     || false,
-                    |parse, element| parse.sink_event(pad, element, event),
+                    |element| element.sink_event(pad, event),
                 )
             })
             .query_function(|pad, parent, query| {
                 DataframeAgg::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.sink_query(pad, element, query),
+                    |element| element.sink_query(pad, query),
                 )
             })
             .build();
@@ -384,8 +356,10 @@ impl ObjectSubclass for DataframeAgg {
 }
 
 impl ObjectImpl for DataframeAgg {
-    fn constructed(&self, obj: &Self::Type) {
-        self.parent_constructed(obj);
+    fn constructed(&self) {
+        self.parent_constructed();
+        let obj = self.instance();
+
         obj.add_pad(&self.sinkpad).unwrap();
         obj.add_pad(&self.srcpad).unwrap();
     }
@@ -447,7 +421,7 @@ impl ObjectImpl for DataframeAgg {
         PROPERTIES.as_ref()
     }
 
-    fn property(&self, _obj: &Self::Type, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+    fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
         let settings = self.settings.lock().unwrap();
         match pspec.name() {
             "ddof" => settings.ddof.to_value(),
@@ -464,13 +438,7 @@ impl ObjectImpl for DataframeAgg {
         }
     }
 
-    fn set_property(
-        &self,
-        _obj: &Self::Type,
-        _id: usize,
-        value: &glib::Value,
-        pspec: &glib::ParamSpec,
-    ) {
+    fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
         let mut settings = self.settings.lock().unwrap();
 
         match pspec.name() {
@@ -559,12 +527,12 @@ impl ElementImpl for DataframeAgg {
     // the element again.
     fn change_state(
         &self,
-        element: &Self::Type,
         transition: gst::StateChange,
     ) -> Result<gst::StateChangeSuccess, gst::StateChangeError> {
+        let element = self.instance();
         gst::trace!(CAT, obj: element, "Changing state {:?}", transition);
 
         // Call the parent class' implementation of ::change_state()
-        self.parent_change_state(element, transition)
+        self.parent_change_state(transition)
     }
 }

@@ -47,7 +47,6 @@ impl Default for Settings {
     }
 }
 
-#[derive(Clone)]
 pub struct DataframeFileSink {
     multifilesink: gst::Element,
     settings: Arc<Mutex<Settings>>,
@@ -77,6 +76,7 @@ impl ObjectSubclass for DataframeFileSink {
         // let srcpad = gst::GhostPad::from_template(&templ, Some("src"));
 
         let multifilesink = gst::ElementFactory::make("multifilesink", Some("dataframe_multifilesink")).unwrap();
+
 
         // Return an instance of our struct
         Self {
@@ -127,7 +127,6 @@ impl ObjectImpl for DataframeFileSink {
 
     fn set_property(
         &self,
-        _obj: &Self::Type,
         _id: usize,
         value: &glib::Value,
         pspec: &glib::ParamSpec,
@@ -177,7 +176,7 @@ impl ObjectImpl for DataframeFileSink {
         };
     }
 
-    fn property(&self, _obj: &Self::Type, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+    fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
         let settings = self.settings.lock().unwrap();
         match pspec.name() {
             "location" => settings.location.to_value(),
@@ -189,14 +188,18 @@ impl ObjectImpl for DataframeFileSink {
         }
     }
 
-    fn constructed(&self, obj: &Self::Type) {
-        self.parent_constructed(obj);
+    fn constructed(&self) {
+        self.parent_constructed();
 
+        let obj = self.instance();
         obj.add(&self.multifilesink).unwrap();
         // only one ghostpad is needed here, since a sink element has no srcpad
         self.sinkpad
             .set_target(Some(&self.multifilesink.static_pad("sink").unwrap()))
             .unwrap();
+
+        gst::log!(CAT, obj: &self.sinkpad, "Initializing DataframeFileSink");
+
         // And finally add the ghostpads to the bin.
         obj.add_pad(&self.sinkpad).unwrap();
     }

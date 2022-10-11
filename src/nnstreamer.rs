@@ -3,16 +3,13 @@ use byte_slice_cast::*;
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::panic::catch_unwind;
-use std::{ptr, slice}; // or NativeEndian
+use std::slice; // or NativeEndian
 
 use gst::prelude::*;
 
 use gst_sys;
 use gst_sys::{GST_FLOW_ERROR, GST_FLOW_OK};
 use once_cell::sync::Lazy;
-
-use polars::export::arrow::io::ipc::write;
-
 use polars::prelude::*;
 
 use libc::{c_char, c_float, c_int, c_void, size_t};
@@ -96,7 +93,7 @@ pub struct GstTensorsConfig {
 extern "C" fn printnanny_bb_dataframe_decoder(
     input: *const GstTensorMemory,
     config: *const GstTensorsConfig,
-    data: libc::c_void,
+    _data: libc::c_void,
     out_buf: *mut gst_sys::GstBuffer,
 ) -> i32 {
     // timestamp value is GstClock time (relative to pipeline PLAYING event), not system clock time
