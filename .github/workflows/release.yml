@@ -11,7 +11,7 @@ on:
 name: Publish
 env:
   BIN: libgstprintnanny.so printnanny-gst-pipeline
-  TAR: printnanny-dash
+  TAR: printnanny-gst-plugin
   CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
 jobs:
