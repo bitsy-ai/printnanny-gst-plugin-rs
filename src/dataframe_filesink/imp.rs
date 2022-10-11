@@ -78,6 +78,7 @@ impl ObjectSubclass for DataframeFileSink {
 
         let multifilesink = gst::ElementFactory::make("multifilesink", Some("dataframe_multifilesink")).unwrap();
 
+
         // Return an instance of our struct
         Self {
             multifilesink,
@@ -197,6 +198,9 @@ impl ObjectImpl for DataframeFileSink {
         self.sinkpad
             .set_target(Some(&self.multifilesink.static_pad("sink").unwrap()))
             .unwrap();
+
+        gst::log!(CAT, obj: &self.sinkpad, "Initializing DataframeFileSink");
+
         // And finally add the ghostpads to the bin.
         obj.add_pad(&self.sinkpad).unwrap();
     }

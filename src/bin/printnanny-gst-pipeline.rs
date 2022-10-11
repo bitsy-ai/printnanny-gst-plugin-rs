@@ -11,19 +11,14 @@
 // Audio / Signed 16bit / 1 channel / arbitrary sample rate
 
 use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
-use gst::element_error;
-use gst::glib;
+use env_logger::Builder;
 use gst::prelude::*;
 
-use byte_slice_cast::*;
-use env_logger::Builder;
-
-use std::i16;
 use std::i32;
 
 use anyhow::{Context, Error};
 use git_version::git_version;
-use log::{error, info, warn, LevelFilter};
+use log::{error, LevelFilter};
 use once_cell::sync::Lazy;
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {

@@ -98,7 +98,7 @@ pub struct DataframeAgg {
 }
 
 impl DataframeAgg {
-    fn drain(&self) -> Result<(), gst::ErrorMessage> {
+    fn _drain(&self) -> Result<(), gst::ErrorMessage> {
         Ok(())
     }
 
