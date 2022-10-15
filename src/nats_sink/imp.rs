@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
 const DEFAULT_NATS_ADDRESS: &str = "127.0.0.1:4222";
-const DEFAULT_NATS_SUBJECT: &str = "pi.qc";
+const DEFAULT_NATS_SUBJECT: &str = "pi.qc.df";
 
 #[derive(Debug, Clone)]
 struct Settings {
