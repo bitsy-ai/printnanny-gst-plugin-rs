@@ -22,7 +22,6 @@ libc = "0.2"             # Raw FFI bindings to platform libraries like libc.
 env_logger = "0.9.1"              # A logging implementation for `log` which is configured via an environment variable. 
 log = "0.4.17"                  # A lightweight logging facade for Rust 
 git-version = "0.3"
-glib = { git = "https://github.com/gtk-rs/gtk-rs-core" }
 gst = { package = "gstreamer", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", features = ["v1_20"]}
 gst-app = { package = "gstreamer-app", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", features = ["v1_20"]}
 gst-sys = { package = "gstreamer-sys", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", features = ["v1_20"]}

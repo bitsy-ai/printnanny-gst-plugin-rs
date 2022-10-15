@@ -1913,7 +1913,6 @@ dependencies = [
  "clap",
  "env_logger",
  "git-version",
- "glib",
  "glob",
  "gst-plugin-version-helper",
  "gstreamer",
