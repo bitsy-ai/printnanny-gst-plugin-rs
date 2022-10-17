@@ -5,7 +5,7 @@ version = "0.1.1"
 edition = "2021"
 authors = ["Leigh Johnson <leigh@printnanny.ai>"]
 license-file = "LICENSE"
-rust-version = "1.63"
+rust-version = "1.64"
 repository = "https://github.com/bitsy-ai/printnanny-gst-plugin-rs/"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -32,7 +32,6 @@ thiserror = "1.0"               # derive(Error)
 polars = { version = "0.24", features = [
     "algo",
     "cum_agg", 
-    "cumulative_eval", 
     "cumulative_eval", 
     "dot_product", 
     "dtype-struct",
@@ -70,3 +69,13 @@ tempdir = "0.3"                   # A library for managing a temporary directory
 
 [build-dependencies]
 gst-plugin-version-helper = {  git = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs"}
+
+[profile.dev]
+debug = 2
+debug-assertions = true
+opt-level = 0
+
+[profile.test]
+debug = 2
+debug-assertions = true
+opt-level = 0

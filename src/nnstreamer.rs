@@ -5,9 +5,8 @@ use std::ffi::CString;
 use std::panic::catch_unwind;
 use std::slice; // or NativeEndian
 
-use gst::prelude::*;
+use log::info;
 
-use gst_sys;
 use gst_sys::{GST_FLOW_ERROR, GST_FLOW_OK};
 use once_cell::sync::Lazy;
 use polars::prelude::*;
@@ -18,7 +17,6 @@ use crate::ipc;
 
 const NNS_TENSOR_RANK_LIMIT: usize = 4;
 
-// This module contains the private implementation details of our element
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
         "printnanny",
@@ -90,19 +88,13 @@ pub struct GstTensorsConfig {
 }
 
 // based on: https://github.com/nnstreamer/nnstreamer/blob/f2c3bcd87f34ac2ad52ca0a17f6515c54e6f2d66/tests/nnstreamer_decoder/unittest_decoder.cc#L28
-extern "C" fn printnanny_bb_dataframe_decoder(
+pub extern "C" fn printnanny_bb_dataframe_decoder(
     input: *const GstTensorMemory,
     config: *const GstTensorsConfig,
     _data: libc::c_void,
     out_buf: *mut gst_sys::GstBuffer,
 ) -> i32 {
-    // timestamp value is GstClock time (relative to pipeline PLAYING event), not system clock time
-
     let result = catch_unwind(|| {
-        // let ts = gst::util_get_timestamp().nseconds();
-        let clock = gst::SystemClock::obtain();
-        let ts = clock.time().unwrap().nseconds();
-
         let num_tensors = unsafe { (*config).info.num_tensors };
         if num_tensors != 4 {
             gst::error!(
@@ -192,9 +184,6 @@ extern "C" fn printnanny_bb_dataframe_decoder(
             unsafe { slice::from_raw_parts(input_data[2].data as *mut u8, input_data[2].size) };
         let scores = scores.as_slice_of::<c_float>().unwrap().to_vec();
 
-        let ts_series = Series::new("ts", vec![ts; num_detections as usize])
-            .timestamp(TimeUnit::Nanoseconds)
-            .expect("Failed to parse nanosecond timestamp");
         let mut df = df!(
             "detection_boxes_x0" => boxes.column(0).to_vec(),
             "detection_boxes_y0" => boxes.column(1).to_vec(),
@@ -202,7 +191,6 @@ extern "C" fn printnanny_bb_dataframe_decoder(
             "detection_boxes_y1" => boxes.column(3).to_vec(),
             "detection_classes" => classes,
             "detection_scores" => scores,
-            "ts" => ts_series,
         )
         .expect("Failed to initialize dataframe");
 
@@ -216,9 +204,25 @@ extern "C" fn printnanny_bb_dataframe_decoder(
 
         // derefrence a pointer to GstBuffer, allocate memory from gstreamer memory pool
         let gstbufref = unsafe { gst::BufferRef::from_mut_ptr(out_buf) };
-        let gstmem = gst::Memory::with_size(arrow_msg.len());
-        gstbufref.replace_all_memory(gstmem);
 
+        // if the buffer size is 0 or not all memory blocks are writable (page guard), request a new allocation
+        let need_alloc = gstbufref.size() == 0 || !gstbufref.is_all_memory_writable();
+
+        match need_alloc {
+            true => {
+                let outmem = gst::Memory::with_size(arrow_msg.len());
+                info!("need_alloc true, allocating memory");
+                gstbufref.append_memory(outmem);
+            }
+            false => {
+                info!("need_alloc false, setting buffer size");
+                if gstbufref.size() < arrow_msg.len() {
+                    gstbufref.set_size(arrow_msg.len());
+                }
+            }
+        };
+
+        // map writable buffer
         let mut buffermap = gstbufref
             .map_writable()
             .expect("Failed to map writable buffer");

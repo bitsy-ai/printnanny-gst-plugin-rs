@@ -33,6 +33,7 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
 pub enum VideoStreamSource {
     File,
     Device,
+    Uri,
 }
 
 struct TfliteModel {
@@ -103,6 +104,7 @@ struct PipelineApp {
     video_width: i32,
     model: TfliteModel,
     udp_port: i32,
+    preview: bool,
 }
 
 impl From<&ArgMatches> for PipelineApp {
@@ -127,8 +129,11 @@ impl From<&ArgMatches> for PipelineApp {
             .unwrap();
         let udp_port: i32 = args.value_of_t("udp_port").context("--udp-port").unwrap();
 
+        let preview = args.is_present("preview");
+
         Self {
             model,
+            preview,
             input_path,
             video_height,
             video_width,
@@ -139,24 +144,33 @@ impl From<&ArgMatches> for PipelineApp {
 }
 
 impl PipelineApp {
-    fn pipeline_src(&self) -> String {
+    fn decoded_video_src(&self) -> String {
         match self.video_stream_src {
             VideoStreamSource::File => format!(
-                "filesrc location={input_path} do-timestamp=true",
+                "filesrc location={input_path} do-timestamp=true ! qtdemux name=demux demux.video_0 ! decodebin",
                 input_path = self.input_path
             ),
             VideoStreamSource::Device => "libcamerasrc".to_string(),
+            VideoStreamSource::Uri => {
+                format!(
+                    "uridecodebin uri={input_path}",
+                    input_path = self.input_path
+                )
+            }
         }
     }
 
     pub fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
         gst::init()?;
 
-        let pipeline_src = self.pipeline_src();
+        let decoded_video_src = self.decoded_video_src();
+
         let pipeline_str = format!(
-            "{pipeline_src} \
-            ! qtdemux name=demux \
-            demux.video_0 ! decodebin \
+            "{decoded_video_src} \
+            ! videorate \
+            ! videoscale \
+            ! videoconvert \
+            ! video/x-raw,framerate={framerate}/1,width={video_width},height={video_height},format=RGB \
             ! tee name=decoded_video_t \
             decoded_video_t. \
             ! queue name=decoded_video_tensor_q \
@@ -166,30 +180,29 @@ impl PipelineApp {
             ! tensor_converter
             ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
             ! capsfilter caps=other/tensors,num_tensors=1,format=static \
-            ! queue name=tensor_filter_q \
+            ! queue name=tensor_filter_q leaky=2 max-size-buffers=10 \
             ! tensor_filter framework=tensorflow2-lite model={model_file} \
-            ! tee name=tensor_t 
+            ! tee name=tensor_t \
             ! queue name=tensor_decoder_q \
-            ! tensor_rate framerate={framerate}/1 throttle=true \
             ! tensor_decoder mode=bounding_boxes \
                 option1=mobilenet-ssd-postprocess \
                 option2={label_file} \
                 option3=0:1:2:3,{nms_threshold} \
                 option4={video_width}:{video_height} \
                 option5={tensor_width}:{tensor_height} \
+            ! videorate \
+            ! videoscale \
+            ! videoconvert \
+            ! video/x-raw,framerate={framerate}/1,width={video_width},height={video_height},format=RGBA \
             ! queue name=compositor_q \
             ! compositor name=comp sink_0::zorder=2 sink_1::zorder=1 \
-            ! timeoverlay \
             ! encodebin profile=\"video/x-h264,tune=zerolatency,profile=main\" \
             ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
-            ! queue2 \
             ! udpsink port={udp_port} \
             decoded_video_t. ! queue name=videoscale_q \
-            ! videoscale \
-            ! capsfilter caps=video/x-raw,width={video_width},height={video_height} ! comp.sink_1 \
+            ! timeoverlay ! comp.sink_1 \
             tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
             ! dataframe_agg filter-threshold=0.5 output-type=json \
-            ! queue2 \
             ! nats_sink \
             ",
             tensor_height = &self.model.tensor_height,
@@ -201,7 +214,7 @@ impl PipelineApp {
             video_height = &self.video_height,
             framerate = 15,
             udp_port = &self.udp_port,
-            pipeline_src = pipeline_src
+            decoded_video_src = decoded_video_src
         );
 
         let pipeline = gst::parse_launch(&pipeline_str)?;
@@ -274,6 +287,12 @@ fn main() {
                 .help("Sets the level of verbosity. Info: -v Debug: -vv Trace: -vvv"),
         )
         .arg(
+            Arg::new("preview")
+                .long("--preview")
+                .takes_value(false)
+                .help("Show preview using autovideosink"),
+        )
+        .arg(
             Arg::new("udp_port")
                 .long("--udp-port")
                 .takes_value(true)
@@ -299,14 +318,14 @@ fn main() {
         .arg(
             Arg::new("video_height")
                 .long("video-height")
-                .default_value("720")
+                .default_value("480")
                 .takes_value(true)
                 .help("Height of input video file"),
         )
         .arg(
             Arg::new("video_width")
                 .long("video-width")
-                .default_value("960")
+                .default_value("640")
                 .takes_value(true)
                 .help("Width of input video file"),
         )
