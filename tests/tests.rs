@@ -194,7 +194,7 @@ fn test_dataframe_agg() {
     let model_path: PathBuf = base_path.join("fixtures/model.tflite");
 
     let expected_buffers = 512;
-    let expected_columns = 19;
+    let expected_columns = 21;
     let num_detections = 40;
     let max_duration = "10s";
 
@@ -226,7 +226,6 @@ fn test_dataframe_agg() {
 
     let max_duration_ns = Duration::parse(max_duration).nanoseconds();
 
-    let mut num_buffers = 0;
     while let Some(buffer) = h.pull_until_eos().unwrap() {
         let cursor = buffer.as_cursor_readable();
         let df = IpcStreamReader::new(cursor)
