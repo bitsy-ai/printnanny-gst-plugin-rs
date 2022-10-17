@@ -194,7 +194,7 @@ fn test_dataframe_agg() {
     let model_path: PathBuf = base_path.join("fixtures/model.tflite");
 
     let expected_buffers = 512;
-    let expected_columns = 19;
+    let expected_columns = 21;
     let num_detections = 40;
     let max_duration = "10s";
 
@@ -242,7 +242,7 @@ fn test_dataframe_agg() {
         let df = df
             .clone()
             .lazy()
-            .select([(col("ts").max() - col("ts").min()).alias("ts_diff")])
+            .select([(col("rt").max() - col("rt").min()).alias("rt_diff")])
             .collect()
             .unwrap();
 
