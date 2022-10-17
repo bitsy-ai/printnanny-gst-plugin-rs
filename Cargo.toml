@@ -71,11 +71,11 @@ tempdir = "0.3"                   # A library for managing a temporary directory
 gst-plugin-version-helper = {  git = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs"}
 
 [profile.dev]
-debug = true
+debug = 2
 debug-assertions = true
 opt-level = 0
 
 [profile.test]
-debug = true
+debug = 2
 debug-assertions = true
 opt-level = 0

@@ -31,7 +31,7 @@ const DEFAULT_WINDOW_TRUNCATE: bool = false;
 const DEFAULT_WINDOW_INCLUDE_BOUNDARIES: bool = true;
 
 struct State {
-    dataframe: LazyFrame,
+    dataframe: DataFrame,
 }
 
 impl Default for State {
@@ -54,8 +54,7 @@ impl Default for State {
             "ts" => ts,
             "rt" => rt
         )
-        .expect("Failed to initialize dataframe")
-        .lazy();
+        .expect("Failed to initialize dataframe");
         Self { dataframe }
     }
 }
@@ -181,13 +180,10 @@ impl DataframeAgg {
             .finish()
             .expect("Failed to deserialize Arrow IPC Stream")
             .lazy()
-            .with_columns(vec![lit(ts).alias("ts"), lit(rt).alias("rt")])
-            .collect()
-            .expect("Filed to extrct Dataaframe")
-            .lazy();
+            .with_columns(vec![lit(ts).alias("ts"), lit(rt).alias("rt")]);
 
         let max_duration = Duration::parse(&settings.max_size_duration);
-        state.dataframe = concat(vec![state.dataframe.clone(), df], true, true)
+        state.dataframe = concat(vec![state.dataframe.clone().lazy(), df], true, false)
             .map_err(|err| {
                 gst::error!(CAT, "Failed to merge dataframes: {}", err);
                 gst::FlowError::Error
@@ -196,7 +192,16 @@ impl DataframeAgg {
                 col("detection_scores")
                     .gt(settings.filter_threshold)
                     .and(col("rt").gt(col("rt").max() - lit(max_duration.nanoseconds()))),
-            );
+            )
+            .sort(
+                "rt",
+                SortOptions {
+                    descending: false,
+                    nulls_last: false,
+                },
+            )
+            .collect()
+            .expect("Failed to collect dataframes");
         let group_options = DynamicGroupOptions {
             index_column: "rt".to_string(),
             every: Duration::parse(&settings.window_interval),
@@ -206,18 +211,15 @@ impl DataframeAgg {
             truncate: false,
             include_boundaries: true,
         };
-        println!("{:?}", &state.dataframe.clone().collect());
 
-        let mut windowed_df = state
-            .dataframe
-            .clone()
-            .sort(
-                "rt",
-                SortOptions {
-                    descending: false,
-                    nulls_last: false,
-                },
-            )
+        let localdf = state.dataframe.clone();
+        // release state lock
+        drop(state);
+
+        println!("{:?}", &localdf);
+
+        let mut windowed_df = localdf
+            .lazy()
             .groupby_dynamic([col("detection_classes")], group_options)
             .agg([
                 col("rt").min().alias("rt__min"),

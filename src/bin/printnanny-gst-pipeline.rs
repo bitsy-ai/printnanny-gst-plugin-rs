@@ -198,13 +198,11 @@ impl PipelineApp {
             ! compositor name=comp sink_0::zorder=2 sink_1::zorder=1 \
             ! encodebin profile=\"video/x-h264,tune=zerolatency,profile=main\" \
             ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
-            ! queue2 \
             ! udpsink port={udp_port} \
             decoded_video_t. ! queue name=videoscale_q \
             ! timeoverlay ! comp.sink_1 \
             tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
             ! dataframe_agg filter-threshold=0.5 output-type=json \
-            ! queue2 \
             ! nats_sink \
             ",
             tensor_height = &self.model.tensor_height,
