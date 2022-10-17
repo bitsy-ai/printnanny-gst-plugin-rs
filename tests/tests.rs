@@ -226,6 +226,7 @@ fn test_dataframe_agg() {
 
     let max_duration_ns = Duration::parse(max_duration).nanoseconds();
 
+    let mut num_buffers = 0;
     while let Some(buffer) = h.pull_until_eos().unwrap() {
         let cursor = buffer.as_cursor_readable();
         let df = IpcStreamReader::new(cursor)
