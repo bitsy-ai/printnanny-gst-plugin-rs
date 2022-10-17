@@ -36,17 +36,6 @@ pub enum VideoStreamSource {
     Uri,
 }
 
-struct TfliteModel {
-    label_file: String,
-    model_file: String,
-    nms_threshold: i32,
-    tensor_batch_size: i32,
-    tensor_channels: i32,
-    tensor_height: i32,
-    tensor_width: i32,
-    tensor_queue_max_size_bytes: u32,
-}
-
 impl From<&ArgMatches> for TfliteModel {
     fn from(args: &ArgMatches) -> Self {
         let label_file = args
