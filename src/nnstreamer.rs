@@ -5,10 +5,8 @@ use std::ffi::CString;
 use std::panic::catch_unwind;
 use std::slice; // or NativeEndian
 
-use gst::prelude::*;
 use log::info;
 
-use gst_sys::{self, gst_buffer_get_all_memory, gst_buffer_get_size, gst_buffer_set_size};
 use gst_sys::{GST_FLOW_ERROR, GST_FLOW_OK};
 use once_cell::sync::Lazy;
 use polars::prelude::*;
@@ -208,7 +206,7 @@ pub extern "C" fn printnanny_bb_dataframe_decoder(
         let gstbufref = unsafe { gst::BufferRef::from_mut_ptr(out_buf) };
 
         // if the buffer size is 0 or not all memory blocks are writable (page guard), request a new allocation
-        let need_alloc = gstbufref.size() == 0 || gstbufref.is_all_memory_writable() == false;
+        let need_alloc = gstbufref.size() == 0 || !gstbufref.is_all_memory_writable();
 
         match need_alloc {
             true => {

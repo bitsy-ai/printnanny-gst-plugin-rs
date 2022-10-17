@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
-use gst_sys::{gst_element_get_current_clock_time, gst_element_get_current_running_time};
 use once_cell::sync::Lazy;
 use polars::prelude::*;
 
