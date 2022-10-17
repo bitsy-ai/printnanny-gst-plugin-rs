@@ -167,6 +167,10 @@ impl PipelineApp {
 
         let pipeline_str = format!(
             "{decoded_video_src} \
+            ! videorate \
+            ! videoscale \
+            ! videoconvert \
+            ! video/x-raw,framerate={framerate}/1,width={video_width},height={video_height},format=RGB \
             ! tee name=decoded_video_t \
             decoded_video_t. \
             ! queue name=decoded_video_tensor_q \
@@ -176,7 +180,7 @@ impl PipelineApp {
             ! tensor_converter
             ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
             ! capsfilter caps=other/tensors,num_tensors=1,format=static \
-            ! queue name=tensor_filter_q \
+            ! queue name=tensor_filter_q leaky=2 max-size-buffers=10 \
             ! tensor_filter framework=tensorflow2-lite model={model_file} \
             ! tee name=tensor_t \
             ! queue name=tensor_decoder_q \
@@ -186,6 +190,10 @@ impl PipelineApp {
                 option3=0:1:2:3,{nms_threshold} \
                 option4={video_width}:{video_height} \
                 option5={tensor_width}:{tensor_height} \
+            ! videorate \
+            ! videoscale \
+            ! videoconvert \
+            ! video/x-raw,framerate={framerate}/1,width={video_width},height={video_height},format=RGBA \
             ! queue name=compositor_q \
             ! compositor name=comp sink_0::zorder=2 sink_1::zorder=1 \
             ! encodebin profile=\"video/x-h264,tune=zerolatency,profile=main\" \
@@ -193,8 +201,7 @@ impl PipelineApp {
             ! queue2 \
             ! udpsink port={udp_port} \
             decoded_video_t. ! queue name=videoscale_q \
-            ! videoscale \
-            ! capsfilter caps=video/x-raw,width={video_width},height={video_height} ! timeoverlay ! comp.sink_1 \
+            ! timeoverlay ! comp.sink_1 \
             tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
             ! dataframe_agg filter-threshold=0.5 output-type=json \
             ! queue2 \
@@ -207,7 +214,7 @@ impl PipelineApp {
             nms_threshold = &self.model.nms_threshold,
             video_width = &self.video_width,
             video_height = &self.video_height,
-            // framerate = 15,
+            framerate = 15,
             udp_port = &self.udp_port,
             decoded_video_src = decoded_video_src
         );

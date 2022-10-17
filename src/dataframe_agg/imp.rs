@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
-
+use gst_sys::{gst_element_get_current_clock_time, gst_element_get_current_running_time};
 use once_cell::sync::Lazy;
 use polars::prelude::*;
 
@@ -23,7 +23,7 @@ const DEFAULT_OUTPUT_TYPE: DataframeOutputType = DataframeOutputType::ArrowStrea
 const DEFAULT_MAX_SIZE_DURATION: &str = "30s";
 const DEFAULT_MAX_SIZE_BUFFERS: u64 = 900; // approx 1 minute of buffer frames @ 15fps
 const DEFAULT_WINDOW_INTERVAL: &str = "1s";
-const DEFAULT_WINDOW_PERIOD: &str = "1s";
+const DEFAULT_WINDOW_PERIOD: &str = "3s";
 const DEFAULT_WINDOW_OFFSET: &str = "0s";
 const DEFAULT_SCORE_THRESHOLD: f32 = 0.5;
 const DEFAULT_DDOF: u8 = 0; // delta degrees of freedom, used in std dev calculation. divisor = N - ddof, where N is the number of element in the set
@@ -43,7 +43,7 @@ impl Default for State {
         let classes: Vec<i32> = vec![];
         let scores: Vec<f32> = vec![];
         let ts: Vec<i64> = vec![];
-
+        let rt: Vec<i64> = vec![];
         let dataframe = df!(
             "detection_boxes_x0" => x0,
             "detection_boxes_y0" => y0,
@@ -51,7 +51,8 @@ impl Default for State {
             "detection_boxes_y1" =>y1,
             "detection_classes" => classes,
             "detection_scores" => scores,
-            "ts" => ts
+            "ts" => ts,
+            "rt" => rt
         )
         .expect("Failed to initialize dataframe")
         .lazy();
@@ -161,6 +162,15 @@ impl DataframeAgg {
     ) -> Result<gst::FlowSuccess, gst::FlowError> {
         gst::log!(CAT, obj: pad, "Handling buffer {:?}", buffer);
 
+        let ts = match self.instance().current_clock_time() {
+            Some(clock) => clock.nseconds(),
+            None => 0,
+        } as i64;
+        let rt = match self.instance().current_running_time() {
+            Some(clock) => clock.nseconds(),
+            None => 0,
+        } as i64;
+
         let mut state = self.state.lock().unwrap();
         let settings = self.settings.lock().unwrap();
 
@@ -170,32 +180,37 @@ impl DataframeAgg {
         let df = reader
             .finish()
             .expect("Failed to deserialize Arrow IPC Stream")
+            .lazy()
+            .with_columns(vec![lit(ts).alias("ts"), lit(rt).alias("rt")])
+            .collect()
+            .expect("Filed to extrct Dataaframe")
             .lazy();
 
         let max_duration = Duration::parse(&settings.max_size_duration);
-        state.dataframe = concat(vec![state.dataframe.clone(), df], true, true).map_err(|err| {
-            gst::error!(CAT, "Failed to merge dataframes: {}", err);
-            gst::FlowError::Error
-        })?;
+        state.dataframe = concat(vec![state.dataframe.clone(), df], true, true)
+            .map_err(|err| {
+                gst::error!(CAT, "Failed to merge dataframes: {}", err);
+                gst::FlowError::Error
+            })?
+            .filter(col("detection_scores").gt(settings.filter_threshold))
+            .filter(col("rt").gt(col("rt").max() - lit(max_duration.nanoseconds())));
 
         let group_options = DynamicGroupOptions {
-            index_column: "ts".to_string(),
+            index_column: "rt".to_string(),
             every: Duration::parse(&settings.window_interval),
             period: Duration::parse(&settings.window_period),
             offset: Duration::parse(&settings.window_offset),
             closed_window: ClosedWindow::Left,
             truncate: false,
-            include_boundaries: true,
+            include_boundaries: false,
         };
         println!("{:?}", &state.dataframe.clone().collect());
 
         let mut windowed_df = state
             .dataframe
             .clone()
-            .filter(col("detection_scores").gt(settings.filter_threshold))
-            .filter(col("ts").gt_eq(col("ts").max() - lit(max_duration.nanoseconds())))
             .sort(
-                "ts",
+                "rt",
                 SortOptions {
                     descending: false,
                     nulls_last: false,
@@ -203,6 +218,8 @@ impl DataframeAgg {
             )
             .groupby_dynamic([col("detection_classes")], group_options)
             .agg([
+                col("rt").min().alias("rt__min"),
+                col("rt").max().alias("rt__max"),
                 col("detection_scores")
                     .filter(col("detection_classes").eq(0))
                     .count()

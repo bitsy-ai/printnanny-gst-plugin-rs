@@ -99,10 +99,6 @@ extern "C" fn printnanny_bb_dataframe_decoder(
     // timestamp value is GstClock time (relative to pipeline PLAYING event), not system clock time
 
     let result = catch_unwind(|| {
-        // let ts = gst::util_get_timestamp().nseconds();
-        let clock = gst::SystemClock::obtain();
-        let ts = clock.time().unwrap().nseconds();
-
         let num_tensors = unsafe { (*config).info.num_tensors };
         if num_tensors != 4 {
             gst::error!(
@@ -192,9 +188,6 @@ extern "C" fn printnanny_bb_dataframe_decoder(
             unsafe { slice::from_raw_parts(input_data[2].data as *mut u8, input_data[2].size) };
         let scores = scores.as_slice_of::<c_float>().unwrap().to_vec();
 
-        let ts_series = Series::new("ts", vec![ts; num_detections as usize])
-            .timestamp(TimeUnit::Nanoseconds)
-            .expect("Failed to parse nanosecond timestamp");
         let mut df = df!(
             "detection_boxes_x0" => boxes.column(0).to_vec(),
             "detection_boxes_y0" => boxes.column(1).to_vec(),
@@ -202,7 +195,6 @@ extern "C" fn printnanny_bb_dataframe_decoder(
             "detection_boxes_y1" => boxes.column(3).to_vec(),
             "detection_classes" => classes,
             "detection_scores" => scores,
-            "ts" => ts_series,
         )
         .expect("Failed to initialize dataframe");
 
