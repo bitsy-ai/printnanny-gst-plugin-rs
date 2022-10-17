@@ -108,8 +108,8 @@ fn test_nnstreamer_callback() {
             .finish()
             .expect("Failed to extract dataframe");
 
-        // dataframe should have 7 columns and num_detections rows
-        assert_eq!(df.shape(), (num_detections, 7));
+        // dataframe should have 6 columns and num_detections rows
+        assert_eq!(df.shape(), (num_detections, 6));
 
         println!("Pulled dataframe from buffer {:?}", df);
         num_buffers += 1;

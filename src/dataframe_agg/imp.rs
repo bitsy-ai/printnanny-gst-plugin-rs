@@ -192,17 +192,19 @@ impl DataframeAgg {
                 gst::error!(CAT, "Failed to merge dataframes: {}", err);
                 gst::FlowError::Error
             })?
-            .filter(col("detection_scores").gt(settings.filter_threshold))
-            .filter(col("rt").gt(col("rt").max() - lit(max_duration.nanoseconds())));
-
+            .filter(
+                col("detection_scores")
+                    .gt(settings.filter_threshold)
+                    .and(col("rt").gt(col("rt").max() - lit(max_duration.nanoseconds()))),
+            );
         let group_options = DynamicGroupOptions {
             index_column: "rt".to_string(),
             every: Duration::parse(&settings.window_interval),
             period: Duration::parse(&settings.window_period),
             offset: Duration::parse(&settings.window_offset),
-            closed_window: ClosedWindow::Left,
+            closed_window: ClosedWindow::Right,
             truncate: false,
-            include_boundaries: false,
+            include_boundaries: true,
         };
         println!("{:?}", &state.dataframe.clone().collect());
 
