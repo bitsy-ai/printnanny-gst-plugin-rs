@@ -242,7 +242,7 @@ fn test_dataframe_agg() {
         let df = df
             .clone()
             .lazy()
-            .select([(col("ts").max() - col("ts").min()).alias("ts_diff")])
+            .select([(col("rt").max() - col("rt").min()).alias("rt_diff")])
             .collect()
             .unwrap();
 
