@@ -22,7 +22,7 @@ use log::{error, LevelFilter};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use printnanny_services::config::{PrintNannyGstPipelineConfig, TfliteModelConfig, VideoSrcType};
+use printnanny_services::config::{PrintNannyConfig, PrintNannyGstPipelineConfig, VideoSrcType};
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -188,6 +188,27 @@ fn main() {
                 .help("Sets the level of verbosity. Info: -v Debug: -vv Trace: -vvv"),
         )
         .arg(
+            Arg::new("config")
+                .long("--config")
+                .takes_value(false)
+                .conflicts_with_all(&[
+                    "preview",
+                    "udp_port",
+                    "nms_threshold",
+                    "video_src",
+                    "video_height",
+                    "video_width",
+                    "video_src_type",
+                    "tensor_batch_size",
+                    "tensor_height",
+                    "tensor_width",
+                    "tensor_channels",
+                    "model_file",
+                    "label_file"
+                ])
+                .help("Read command-line args from config file. Config must be a valid PrintNannyConfig figment"),
+        )
+        .arg(
             Arg::new("preview")
                 .long("--preview")
                 .takes_value(false)
@@ -236,14 +257,6 @@ fn main() {
                 .long("video-src-type")
                 .value_parser(value_parser!(VideoSrcType))
                 .takes_value(true),
-        )
-        // --tensor-queue-max-size-bytes
-        .arg(
-            Arg::new("tensor_queue_max_size_bytes")
-                .long("tensor-queue-max-size-bytes")
-                .takes_value(true)
-                .default_value("33554432")
-                .help("Max amount of data to hold in tensor queue, in bytes"),
         )
         // --tensor-batch-size
         .arg(
@@ -313,7 +326,18 @@ fn main() {
             log_builder.filter_level(LevelFilter::Trace).init()
         }
     };
-    let app = PipelineApp::from(&args);
+
+    let app = match args.value_of("config") {
+        Some(config_file) => {
+            let config = PrintNannyConfig
+                .from_toml(config_file)
+                .expect("Failed to extract config")
+                .vision;
+            PipelineApp { config }
+        }
+        None => PipelineApp::from(&args),
+    };
+
     match app.create_pipeline().and_then(run) {
         Ok(r) => r,
         Err(e) => error!("Error running pipeline: {:?}", e),
