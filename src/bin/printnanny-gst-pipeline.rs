@@ -13,6 +13,7 @@
 use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
 use env_logger::Builder;
 use gst::prelude::*;
+use std::path::PathBuf;
 
 use std::i32;
 
@@ -20,6 +21,9 @@ use anyhow::{Context, Error};
 use git_version::git_version;
 use log::{error, LevelFilter};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+
+use printnanny_services::config::{PrintNannyConfig, PrintNannyGstPipelineConfig, VideoSrcType};
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -29,132 +33,23 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     )
 });
 
-#[derive(Debug, Clone, clap::ValueEnum)]
-pub enum VideoStreamSource {
-    File,
-    Device,
-    Uri,
-}
-
-struct TfliteModel {
-    label_file: String,
-    model_file: String,
-    nms_threshold: i32,
-    tensor_batch_size: i32,
-    tensor_channels: i32,
-    tensor_height: i32,
-    tensor_width: i32,
-    tensor_queue_max_size_bytes: u32,
-}
-
-impl From<&ArgMatches> for TfliteModel {
-    fn from(args: &ArgMatches) -> Self {
-        let label_file = args
-            .value_of("label_file")
-            .expect("--label-file is required")
-            .into();
-        let model_file = args
-            .value_of("model_file")
-            .expect("--model-file is required")
-            .into();
-        let tensor_batch_size: i32 = args
-            .value_of_t("tensor_batch_size")
-            .context("--tensor-batch-size must be an integer")
-            .unwrap();
-
-        let tensor_height: i32 = args
-            .value_of_t("tensor_height")
-            .context("--tensor-height must be an integer")
-            .unwrap();
-
-        let tensor_width: i32 = args
-            .value_of_t("tensor_width")
-            .context("--tensor-width must be an integer")
-            .unwrap();
-
-        let tensor_channels: i32 = args
-            .value_of_t("tensor_channels")
-            .context("--tensor-channels must be an integer")
-            .unwrap();
-
-        let tensor_queue_max_size_bytes: u32 = args
-            .value_of_t("tensor_queue_max_size_bytes")
-            .context("--tensor-queue-max-size-bytes must be an integer")
-            .unwrap();
-        let nms_threshold: i32 = args
-            .value_of_t("nms_threshold")
-            .context("--nms-threshold must be an integer")
-            .unwrap();
-        Self {
-            label_file,
-            model_file,
-            nms_threshold,
-            tensor_batch_size,
-            tensor_channels,
-            tensor_height,
-            tensor_queue_max_size_bytes,
-            tensor_width,
-        }
-    }
-}
-struct PipelineApp {
-    video_stream_src: VideoStreamSource,
-    input_path: String,
-    video_height: i32,
-    video_width: i32,
-    model: TfliteModel,
-    udp_port: i32,
-    preview: bool,
-}
-
-impl From<&ArgMatches> for PipelineApp {
-    fn from(args: &ArgMatches) -> Self {
-        let model = TfliteModel::from(args);
-
-        let video_stream_src: &VideoStreamSource = args
-            .get_one::<VideoStreamSource>("video_stream_src")
-            .expect("--video-stream-src");
-
-        let input_path = args
-            .value_of("input_path")
-            .expect("--video-file is required")
-            .into();
-        let video_height: i32 = args
-            .value_of_t("video_height")
-            .context("--video-height must be an integer")
-            .unwrap();
-        let video_width: i32 = args
-            .value_of_t("video_width")
-            .context("--video-width must be an integer")
-            .unwrap();
-        let udp_port: i32 = args.value_of_t("udp_port").context("--udp-port").unwrap();
-
-        let preview = args.is_present("preview");
-
-        Self {
-            model,
-            preview,
-            input_path,
-            video_height,
-            video_width,
-            video_stream_src: video_stream_src.clone(),
-            udp_port,
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct PipelineApp {
+    config: PrintNannyGstPipelineConfig,
 }
 
 impl PipelineApp {
     fn decoded_video_src(&self) -> String {
-        match self.video_stream_src {
-            VideoStreamSource::File => format!(
-                "filesrc location={input_path} do-timestamp=true ! qtdemux name=demux demux.video_0 ! decodebin",
-                input_path = self.input_path
+        match self.config.video_src_type {
+            VideoSrcType::File => format!(
+                "filesrc location={video_src} do-timestamp=true ! qtdemux name=demux demux.video_0 ! decodebin",
+                video_src = self.config.video_src
             ),
-            VideoStreamSource::Device => "libcamerasrc".to_string(),
-            VideoStreamSource::Uri => {
+            VideoSrcType::Device => "libcamerasrc".to_string(),
+            VideoSrcType::Uri => {
                 format!(
-                    "uridecodebin uri={input_path}",
-                    input_path = self.input_path
+                    "uridecodebin uri={video_src}",
+                    video_src = self.config.video_src
                 )
             }
         }
@@ -205,15 +100,15 @@ impl PipelineApp {
             ! dataframe_agg filter-threshold=0.5 output-type=json \
             ! nats_sink \
             ",
-            tensor_height = &self.model.tensor_height,
-            tensor_width = &self.model.tensor_width,
-            model_file = &self.model.model_file,
-            label_file = &self.model.label_file,
-            nms_threshold = &self.model.nms_threshold,
-            video_width = &self.video_width,
-            video_height = &self.video_height,
+            tensor_height = &self.config.tflite_model.tensor_height,
+            tensor_width = &self.config.tflite_model.tensor_width,
+            model_file = &self.config.tflite_model.model_file,
+            label_file = &self.config.tflite_model.label_file,
+            nms_threshold = &self.config.tflite_model.nms_threshold,
+            video_width = &self.config.video_width,
+            video_height = &self.config.video_height,
             framerate = 15,
-            udp_port = &self.udp_port,
+            udp_port = &self.config.udp_port,
             decoded_video_src = decoded_video_src
         );
 
@@ -268,10 +163,17 @@ fn run(pipeline: gst::Pipeline) -> Result<(), Error> {
     Ok(())
 }
 
+impl From<&ArgMatches> for PipelineApp {
+    fn from(args: &ArgMatches) -> Self {
+        let config = PrintNannyGstPipelineConfig::from(args);
+        Self { config }
+    }
+}
+
 fn main() {
     let mut log_builder = Builder::new();
 
-    let app_name = "printnanny-video-demo";
+    let app_name = "printnanny-gst-pipeline";
     const GIT_VERSION: &str = git_version!();
 
     let cmd = Command::new(app_name)
@@ -285,6 +187,27 @@ fn main() {
                 .short('v')
                 .multiple_occurrences(true)
                 .help("Sets the level of verbosity. Info: -v Debug: -vv Trace: -vvv"),
+        )
+        .arg(
+            Arg::new("config")
+                .long("--config")
+                .takes_value(false)
+                .conflicts_with_all(&[
+                    "preview",
+                    "udp_port",
+                    "nms_threshold",
+                    "video_src",
+                    "video_height",
+                    "video_width",
+                    "video_src_type",
+                    "tensor_batch_size",
+                    "tensor_height",
+                    "tensor_width",
+                    "tensor_channels",
+                    "model_file",
+                    "label_file"
+                ])
+                .help("Read command-line args from config file. Config must be a valid PrintNannyConfig figment"),
         )
         .arg(
             Arg::new("preview")
@@ -309,8 +232,8 @@ fn main() {
         )
         // --input-path
         .arg(
-            Arg::new("input_path")
-                .long("input-path")
+            Arg::new("video_src")
+                .long("video-src")
                 .required(true)
                 .takes_value(true)
                 .help("Path to video file or camera device"),
@@ -331,18 +254,10 @@ fn main() {
         )
         // --video-stream-src
         .arg(
-            Arg::new("video_stream_src")
-                .long("video-stream-src")
-                .value_parser(value_parser!(VideoStreamSource))
+            Arg::new("video_src_type")
+                .long("video-src-type")
+                .value_parser(value_parser!(VideoSrcType))
                 .takes_value(true),
-        )
-        // --tensor-queue-max-size-bytes
-        .arg(
-            Arg::new("tensor_queue_max_size_bytes")
-                .long("tensor-queue-max-size-bytes")
-                .takes_value(true)
-                .default_value("33554432")
-                .help("Max amount of data to hold in tensor queue, in bytes"),
         )
         // --tensor-batch-size
         .arg(
@@ -412,7 +327,17 @@ fn main() {
             log_builder.filter_level(LevelFilter::Trace).init()
         }
     };
-    let app = PipelineApp::from(&args);
+
+    let app = match args.value_of("config") {
+        Some(config_file) => {
+            let config = PrintNannyConfig::from_toml(PathBuf::from(config_file))
+                .expect("Failed to extract config")
+                .vision;
+            PipelineApp { config }
+        }
+        None => PipelineApp::from(&args),
+    };
+
     match app.create_pipeline().and_then(run) {
         Ok(r) => r,
         Err(e) => error!("Error running pipeline: {:?}", e),

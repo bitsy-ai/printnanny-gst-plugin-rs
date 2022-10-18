@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
+use log::debug;
 use once_cell::sync::Lazy;
 use polars::prelude::*;
 
@@ -215,7 +216,7 @@ impl DataframeAgg {
         // release state lock
         drop(state);
 
-        println!("{:?}", &localdf);
+        debug!("{:?}", &localdf);
 
         let mut windowed_df = localdf
             .lazy()
