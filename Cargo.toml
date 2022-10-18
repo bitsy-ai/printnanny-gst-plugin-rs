@@ -27,7 +27,7 @@ gst-app = { package = "gstreamer-app", git = "https://gitlab.freedesktop.org/gst
 gst-sys = { package = "gstreamer-sys", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", features = ["v1_20"]}
 gst-base = { package = "gstreamer-base", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", features = ["v1_20"]}
 gst-video = { package = "gstreamer-video", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", features = ["v1_20"]}
-printnanny-services = { package = "printnanny-services", git = "https://github.com/bitsy-ai/printnanny-cli.git" }
+printnanny-services = { package = "printnanny-services", git = "https://github.com/bitsy-ai/printnanny-cli.git", version = "0.26.4" }
 once_cell = "1.0"
 thiserror = "1.0"               # derive(Error)
 polars = { version = "0.24", features = [
