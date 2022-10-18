@@ -13,6 +13,7 @@
 use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
 use env_logger::Builder;
 use gst::prelude::*;
+use std::path::PathBuf;
 
 use std::i32;
 
