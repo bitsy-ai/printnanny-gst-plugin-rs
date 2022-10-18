@@ -329,8 +329,7 @@ fn main() {
 
     let app = match args.value_of("config") {
         Some(config_file) => {
-            let config = PrintNannyConfig
-                .from_toml(config_file)
+            let config = PrintNannyConfig::from_toml(PathBuf::from(config_file))
                 .expect("Failed to extract config")
                 .vision;
             PipelineApp { config }
