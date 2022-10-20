@@ -22,7 +22,6 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use printnanny_services::config::{PrintNannyConfig, PrintNannyGstPipelineConfig, VideoSrcType};
-use printnanny_services::paths::PrintNannyPaths;
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
