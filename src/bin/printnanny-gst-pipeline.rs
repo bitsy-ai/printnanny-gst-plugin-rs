@@ -65,11 +65,12 @@ impl PipelineApp {
                     ! queue \
                     ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
                     ! udpsink port={udp_port} \
-                    h264_composite_video_t. ! queue ! hlssink2 location={hls_segment} playlist-location={hls_playlist} \
+                    h264_composite_video_t. ! queue ! hlssink2 location={hls_segment} playlist-location={hls_playlist} playlist-root={hls_playlist_root} \
                     ",
                     udp_port = &self.config.udp_port,
                     hls_segment = &self.config.hls_segments,
-                    hls_playlist = &self.config.hls_playlist
+                    hls_playlist = &self.config.hls_playlist,
+                    hls_playlist_root = &self.config.hls_playlist_root
                 )
             }
             false => {
@@ -267,6 +268,13 @@ fn main() {
                 .takes_value(true)
                 .default_value("/var/run/printnanny-hls/playlist.m3u8")
                 .help("Location of hls playlistfiles (passed to gstreamer hlssink2 playlist-location parameter)"),
+        )
+        .arg(
+            Arg::new("hls_playlist_root")
+                .long("--hls-playlist-root")
+                .takes_value(true)
+                .default_value("/printnanny-hls/")
+                .help("HTTP serving directory prefix (configured via Nginx)"),
         )
         .arg(
             Arg::new("udp_port")
