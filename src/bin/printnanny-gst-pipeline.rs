@@ -376,15 +376,12 @@ fn main() {
     match verbosity {
         0 => {
             log_builder.filter_level(LevelFilter::Warn).init();
-            gst::debug_set_default_threshold(gst::DebugLevel::Warning);
         }
         1 => {
             log_builder.filter_level(LevelFilter::Info).init();
-            gst::debug_set_default_threshold(gst::DebugLevel::Info);
         }
         2 => {
             log_builder.filter_level(LevelFilter::Debug).init();
-            gst::debug_set_default_threshold(gst::DebugLevel::Debug);
         }
         _ => {
             gst::debug_set_default_threshold(gst::DebugLevel::Trace);
