@@ -258,14 +258,14 @@ fn main() {
             Arg::new("hls_segments")
                 .long("--hls-segments")
                 .takes_value(true)
-                .default_value("/var/run/printnanny/segment%05d.ts")
+                .default_value("/var/run/printnanny-hls/segment%05d.ts")
                 .help("Location of hls segment files (passed to gstreamer hlssink2 location parameter)"),
         )
         .arg(
             Arg::new("hls_playlist")
                 .long("--hls-playlist")
                 .takes_value(true)
-                .default_value("/var/run/printnanny/playlist.m3u8")
+                .default_value("/var/run/printnanny-hls/playlist.m3u8")
                 .help("Location of hls playlistfiles (passed to gstreamer hlssink2 playlist-location parameter)"),
         )
         .arg(
