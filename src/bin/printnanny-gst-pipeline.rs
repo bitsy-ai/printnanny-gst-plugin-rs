@@ -15,9 +15,7 @@ use env_logger::Builder;
 use gst::prelude::*;
 use std::path::PathBuf;
 
-use std::i32;
-
-use anyhow::{Context, Error};
+use anyhow::{Context, Error, Result};
 use git_version::git_version;
 use log::{error, LevelFilter};
 use once_cell::sync::Lazy;
@@ -55,10 +53,44 @@ impl PipelineApp {
         }
     }
 
+    fn h264_video_sinks(&self) -> Result<String> {
+        let hls_http_enabled = match self.config.hls_http_enabled {
+            Some(value) => value,
+            None => self.config.detect_hls_http_enabled()?,
+        };
+        let result = match hls_http_enabled {
+            true => {
+                format!(
+                    "tee name=h264_composite_video_t \
+                    ! queue \
+                    ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
+                    ! udpsink port={udp_port} \
+                    h264_composite_video_t. ! queue ! hlssink2 location={hls_segment} playlist-location={hls_playlist} \
+                    ",
+                    udp_port = &self.config.udp_port,
+                    hls_segment = &self.config.hls_segments,
+                    hls_playlist = &self.config.hls_playlist
+                )
+            }
+            false => {
+                format!(
+                    "rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
+                    ! udpsink port={udp_port} \
+                    ",
+                    udp_port = &self.config.udp_port,
+                )
+            }
+        };
+
+        Ok(result)
+    }
+
     pub fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
         gst::init()?;
 
         let decoded_video_src = self.decoded_video_src();
+
+        let h264_video_sinks = self.h264_video_sinks()?;
 
         let pipeline_str = format!(
             "{decoded_video_src} \
@@ -92,8 +124,7 @@ impl PipelineApp {
             ! queue name=compositor_q \
             ! compositor name=comp sink_0::zorder=2 sink_1::zorder=1 \
             ! encodebin profile=\"video/x-h264,tune=zerolatency,profile=main\" \
-            ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
-            ! udpsink port={udp_port} \
+            ! {h264_video_sinks} \
             decoded_video_t. ! queue name=videoscale_q \
             ! timeoverlay ! comp.sink_1 \
             tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
@@ -107,9 +138,9 @@ impl PipelineApp {
             nms_threshold = &self.config.tflite_model.nms_threshold,
             video_width = &self.config.video_width,
             video_height = &self.config.video_height,
-            framerate = 15,
-            udp_port = &self.config.udp_port,
-            decoded_video_src = decoded_video_src
+            decoded_video_src = decoded_video_src,
+            h264_video_sinks = h264_video_sinks,
+            framerate = &self.config.video_framerate
         );
 
         let pipeline = gst::parse_launch(&pipeline_str)?;
@@ -193,19 +224,21 @@ fn main() {
                 .long("--config")
                 .takes_value(false)
                 .conflicts_with_all(&[
-                    "preview",
-                    "udp_port",
+                    "hls_http_enabled",
+                    "label_file",
+                    "model_file",
                     "nms_threshold",
-                    "video_src",
-                    "video_height",
-                    "video_width",
-                    "video_src_type",
+                    "preview",
                     "tensor_batch_size",
+                    "tensor_channels",
                     "tensor_height",
                     "tensor_width",
-                    "tensor_channels",
-                    "model_file",
-                    "label_file"
+                    "udp_port",
+                    "video_framerate",
+                    "video_height",
+                    "video_src_type",
+                    "video_src",
+                    "video_width",
                 ])
                 .help("Read command-line args from config file. Config must be a valid PrintNannyConfig figment"),
         )
@@ -214,6 +247,26 @@ fn main() {
                 .long("--preview")
                 .takes_value(false)
                 .help("Show preview using autovideosink"),
+        )
+        .arg(
+            Arg::new("hls_http_enabled")
+                .long("--hls-http-enabled")
+                .takes_value(false)
+                .help("Enable HLS HTTP server sink (required for compatibility with OctoPrint)"),
+        )
+        .arg(
+            Arg::new("hls_segments")
+                .long("--hls-segments")
+                .takes_value(true)
+                .default_value("/var/run/printnanny/segment%05d.ts")
+                .help("Location of hls segment files (passed to gstreamer hlssink2 location parameter)"),
+        )
+        .arg(
+            Arg::new("hls_playlist")
+                .long("--hls-playlist")
+                .takes_value(true)
+                .default_value("/var/run/printnanny/playlist.m3u8")
+                .help("Location of hls playlistfiles (passed to gstreamer hlssink2 playlist-location parameter)"),
         )
         .arg(
             Arg::new("udp_port")
@@ -230,7 +283,13 @@ fn main() {
                 .default_value("50")
                 .help("Non-max supression threshold"),
         )
-        // --input-path
+        .arg(
+            Arg::new("video_framerate")
+                .long("video-framerate")
+                .default_value("15")
+                .takes_value(true)
+                .help("Video framerate"),
+        )
         .arg(
             Arg::new("video_src")
                 .long("video-src")
