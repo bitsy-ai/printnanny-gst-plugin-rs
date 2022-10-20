@@ -223,7 +223,7 @@ fn main() {
         .arg(
             Arg::new("config")
                 .long("--config")
-                .takes_value(false)
+                .takes_value(true)
                 .conflicts_with_all(&[
                     "hls_http_enabled",
                     "label_file",
@@ -301,7 +301,6 @@ fn main() {
         .arg(
             Arg::new("video_src")
                 .long("video-src")
-                .required(true)
                 .takes_value(true)
                 .help("Path to video file or camera device"),
         )
@@ -362,14 +361,12 @@ fn main() {
             Arg::new("model_file")
                 .long("model-file")
                 .takes_value(true)
-                .required(true)
                 .help("Path to .tflite model file"),
         )
         .arg(
             Arg::new("label_file")
                 .long("label-file")
                 .takes_value(true)
-                .required(true)
                 .help("Path to labels.txt file"),
         );
     let args = cmd.get_matches();
