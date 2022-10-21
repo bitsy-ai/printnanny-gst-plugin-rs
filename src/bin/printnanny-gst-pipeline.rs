@@ -130,7 +130,7 @@ impl PipelineApp {
             ! timeoverlay ! comp.sink_1 \
             tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
             ! dataframe_agg filter-threshold=0.5 output-type=json \
-            ! nats_sink nats-address="{nats_server_uri}" \
+            ! nats_sink nats-address={nats_server_uri} \
             ",
             tensor_height = &self.config.tflite_model.tensor_height,
             tensor_width = &self.config.tflite_model.tensor_width,
