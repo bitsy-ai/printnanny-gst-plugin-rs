@@ -130,7 +130,7 @@ impl PipelineApp {
             ! timeoverlay ! comp.sink_1 \
             tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
             ! dataframe_agg filter-threshold=0.5 output-type=json \
-            ! nats_sink \
+            ! nats_sink nats-address="{nats_server_uri}" \
             ",
             tensor_height = &self.config.tflite_model.tensor_height,
             tensor_width = &self.config.tflite_model.tensor_width,
@@ -141,7 +141,8 @@ impl PipelineApp {
             video_height = &self.config.video_height,
             decoded_video_src = decoded_video_src,
             h264_video_sinks = h264_video_sinks,
-            framerate = &self.config.video_framerate
+            framerate = &self.config.video_framerate,
+            nats_server_uri = &self.config.nats_server_uri
         );
 
         let pipeline = gst::parse_launch(&pipeline_str)?;
@@ -240,6 +241,7 @@ fn main() {
                     "video_src_type",
                     "video_src",
                     "video_width",
+                    "nats_server_uri"
                 ])
                 .help("Read command-line args from config file. Config must be a valid PrintNannyConfig figment"),
         )
@@ -248,6 +250,12 @@ fn main() {
                 .long("--preview")
                 .takes_value(false)
                 .help("Show preview using autovideosink"),
+        )
+        .arg(
+            Arg::new("nats_server_uri")
+                .long("--nats-server-uri")
+                .takes_value(true)
+                .help("NATS server uri passed to nats_sink element"),
         )
         .arg(
             Arg::new("hls_http_enabled")
