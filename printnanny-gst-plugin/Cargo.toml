@@ -65,11 +65,11 @@ name = "printnanny-gst-pipeline"
 
 [dev-dependencies]
 glob = "0.3"              # Support for matching file paths against Unix shell style patterns.
-gst-check = { package = "gstreamer-check", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", features = ["v1_20"]}
+gst-check = { package = "gstreamer-check", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", features = ["v1_20"],  version = "0.20"}
 tempdir = "0.3"                   # A library for managing a temporary directory and deleting all contents when it's dropped.
 
 [build-dependencies]
-gst-plugin-version-helper = {  git = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs"}
+gst-plugin-version-helper = {  git = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs",  version = "0.20"}
 
 [profile.dev]
 debug = 2
