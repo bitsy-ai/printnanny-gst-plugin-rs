@@ -25,7 +25,7 @@ use printnanny_services::config::{PrintNannyConfig, PrintNannyGstPipelineConfig,
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
-        "PrintNannyDemoVideo",
+        "PrintNannyGstPipeline",
         gst::DebugColorFlags::empty(),
         Some("PritnNanny demo video pipeline"),
     )
@@ -139,7 +139,7 @@ impl PipelineApp {
             ! videoscale \
             ! {vconverter} \
             ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height},format=RGB \
-            ! tensor_converter
+            ! tensor_converter \
             ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
             ! capsfilter caps=other/tensors,num_tensors=1,format=static \
             ! queue name=tensor_filter_q leaky=2 max-size-buffers=10 \
