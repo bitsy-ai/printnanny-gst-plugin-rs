@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Error, Result};
 use git_version::git_version;
-use log::{error, LevelFilter};
+use log::{error, info, LevelFilter};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +86,36 @@ impl PipelineApp {
         Ok(result)
     }
 
+    // detect hardware-accelerated video encoder available via video4linux
+    fn detect_h264_encoder(&self) -> String {
+        match gst::ElementFactory::make("v4l2h264enc", None) {
+            Ok(_) => {
+                info!("Detected v4l2 support, using v4l2h264enc element");
+                "v4l2h264enc extra-controls='controls,repeat_sequence_header=1' ! 'video/x-h264,level=(string)4'".into()
+            }
+            Err(_) => {
+                info!(
+                    "Error making v4l2h264enc element, falling back to software-based x264 element"
+                );
+                "x264 ! 'video/x-h264,level=(string)4'".into()
+            }
+        }
+    }
+
+    // detect hardware-accelerated video converter available via video4linux
+    fn detect_vconverter(&self) -> String {
+        match gst::ElementFactory::make("v4l2convert", None) {
+            Ok(_) => {
+                info!("Detected v4l2 support, using v4l2convert element");
+                "v4l2convert".into()
+            }
+            Err(_) => {
+                info!("Error making v4l2convert element, falling back to software-based videoconvert element");
+                "videoconvert".into()
+            }
+        }
+    }
+
     pub fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
         gst::init()?;
 
@@ -93,17 +123,21 @@ impl PipelineApp {
 
         let h264_video_sinks = self.h264_video_sinks()?;
 
+        let vconverter = self.detect_vconverter();
+
+        let h264_encoder = self.detect_h264_encoder();
+
         let pipeline_str = format!(
             "{decoded_video_src} \
             ! videorate \
             ! videoscale \
-            ! videoconvert \
+            ! {vconverter} \
             ! video/x-raw,framerate={framerate}/1,width={video_width},height={video_height},format=RGB \
             ! tee name=decoded_video_t \
             decoded_video_t. \
             ! queue name=decoded_video_tensor_q \
             ! videoscale \
-            ! videoconvert \
+            ! {vconverter} \
             ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height},format=RGB \
             ! tensor_converter
             ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
@@ -120,11 +154,11 @@ impl PipelineApp {
                 option5={tensor_width}:{tensor_height} \
             ! videorate \
             ! videoscale \
-            ! videoconvert \
+            ! {vconverter} \
             ! video/x-raw,framerate={framerate}/1,width={video_width},height={video_height},format=RGBA \
             ! queue name=compositor_q \
             ! compositor name=comp sink_0::zorder=2 sink_1::zorder=1 \
-            ! encodebin profile=\"video/x-h264,tune=zerolatency,profile=main\" \
+            ! {h264_encoder} \
             ! {h264_video_sinks} \
             decoded_video_t. ! queue name=videoscale_q \
             ! timeoverlay ! comp.sink_1 \
@@ -142,7 +176,9 @@ impl PipelineApp {
             decoded_video_src = decoded_video_src,
             h264_video_sinks = h264_video_sinks,
             framerate = &self.config.video_framerate,
-            nats_server_uri = &self.config.nats_server_uri
+            nats_server_uri = &self.config.nats_server_uri,
+            vconverter = vconverter,
+            h264_encoder = h264_encoder
         );
 
         let pipeline = gst::parse_launch(&pipeline_str)?;
