@@ -104,14 +104,16 @@ impl From<&ArgMatches> for TfliteModelConfig {
 pub struct PrintNannyGstPipelineConfig {
     pub video_src: String,
     pub preview: bool,
-    pub tflite_model: TfliteModelConfig,
     pub nats_server_uri: String,
     pub overlay_udp_port: u16,
     pub video_udp_port: u16,
     pub video_height: i32,
-    pub video_src_type: VideoSrcType,
     pub video_width: i32,
     pub video_framerate: i32,
+    pub hls_segments: String,
+    pub hls_playlist: String,
+    pub hls_playlist_root: String,
+
     //
     // hls_http has 3 possible states:
     // 1) Detect enabled/disabled based on enabled systemd services, indicated by None value
@@ -120,9 +122,9 @@ pub struct PrintNannyGstPipelineConfig {
     // 2) and 3) Explicitly enabled/disabled, indicated by Some(bool)
     // Some(bool) -> bool
     pub hls_http_enabled: Option<bool>,
-    pub hls_segments: String,
-    pub hls_playlist: String,
-    pub hls_playlist_root: String,
+    // complex types last, otherwise serde will raise TomlSerError(ValueAfterTable)
+    pub video_src_type: VideoSrcType,
+    pub tflite_model: TfliteModelConfig,
 }
 
 impl PrintNannyGstPipelineConfig {
@@ -328,6 +330,37 @@ mod tests {
             jail.set_env("PRINTNANNY_GST_CONFIG", config_file.display());
             jail.set_env("PRINTNANNY_GST_TFLITE_MODEL__TENSOR_HEIGHT", expected);
 
+            let config: PrintNannyGstPipelineConfig = PrintNannyGstPipelineConfig::new().unwrap();
+            assert_eq!(config.tflite_model.tensor_width, expected);
+            assert_eq!(config.tflite_model.tensor_height, expected);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_save() {
+        figment::Jail::expect_with(|jail| {
+            let config_file = jail.directory().join("test.toml");
+
+            jail.create_file(
+                "test.toml",
+                r#"
+                profile = "default"
+
+                [tflite_model]
+                tensor_width = 720
+
+                "#,
+            )?;
+
+            let expected = 720;
+            jail.set_env("PRINTNANNY_GST_CONFIG", config_file.display());
+
+            let mut config: PrintNannyGstPipelineConfig =
+                PrintNannyGstPipelineConfig::new().unwrap();
+            config.tflite_model.tensor_height = expected;
+            config.try_save().unwrap();
             let config: PrintNannyGstPipelineConfig = PrintNannyGstPipelineConfig::new().unwrap();
             assert_eq!(config.tflite_model.tensor_width, expected);
             assert_eq!(config.tflite_model.tensor_height, expected);
