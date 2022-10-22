@@ -1,14 +1,4 @@
-// This example demonstrates the use of PrintNanny's detection algorithm against an .mp4 video source
-// It operates the following pipeline:
-
-// {videosrc} - {appsink}
-
-// The application specifies what format it wants to handle. This format
-// is applied by calling set_caps on the appsink. Now it's the audiotestsrc's
-// task to provide this data format. If the element connected to the appsink's
-// sink-pad were not able to provide what we ask them to, this would fail.
-// This is the format we request:
-// Audio / Signed 16bit / 1 channel / arbitrary sample rate
+// Build PrintNanny Gstreamer pipeline
 
 use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
 use env_logger::Builder;
@@ -17,11 +7,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Error, Result};
 use git_version::git_version;
-use log::{error, info, LevelFilter};
+use log::{error, info, warn, LevelFilter};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use printnanny_services::config::{PrintNannyConfig, PrintNannyGstPipelineConfig, VideoSrcType};
+use printnanny_gst_config::config::{PrintNannyGstPipelineConfig, VideoSrcType};
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -67,7 +57,7 @@ impl PipelineApp {
                     ! udpsink port={udp_port} \
                     h264_composite_video_t. ! queue ! hlssink2 location={hls_segment} playlist-location={hls_playlist} playlist-root={hls_playlist_root} \
                     ",
-                    udp_port = &self.config.udp_port,
+                    udp_port = &self.config.video_udp_port,
                     hls_segment = &self.config.hls_segments,
                     hls_playlist = &self.config.hls_playlist,
                     hls_playlist_root = &self.config.hls_playlist_root
@@ -78,7 +68,7 @@ impl PipelineApp {
                     "rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
                     ! udpsink port={udp_port} \
                     ",
-                    udp_port = &self.config.udp_port,
+                    udp_port = &self.config.video_udp_port,
                 )
             }
         };
@@ -88,7 +78,7 @@ impl PipelineApp {
 
     // detect hardware-accelerated video encoder available via video4linux
     fn detect_h264_encoder(&self) -> String {
-        match gst::ElementFactory::make("v4l2h264enc", None) {
+        match gst::ElementFactory::make_with_name("v4l2h264enc", None) {
             Ok(_) => {
                 info!("Detected v4l2 support, using v4l2h264enc element");
                 "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\" ! capsfilter caps=video/x-h264,level=(string)4".into()
@@ -104,7 +94,7 @@ impl PipelineApp {
 
     // detect hardware-accelerated video converter available via video4linux
     fn detect_vconverter(&self) -> String {
-        match gst::ElementFactory::make("v4l2convert", None) {
+        match gst::ElementFactory::make_with_name("v4l2convert", None) {
             Ok(_) => {
                 info!("Detected v4l2 support, using v4l2convert element");
                 "v4l2convert".into()
@@ -132,18 +122,16 @@ impl PipelineApp {
             ! videorate \
             ! videoscale \
             ! {vconverter} \
-            ! video/x-raw,framerate={framerate}/1,width={video_width},height={video_height},format=RGB \
+            ! video/x-raw,framerate={video_framerate}/1,width={video_width},height={video_height} \
             ! tee name=decoded_video_t \
-            decoded_video_t. \
-            ! queue name=decoded_video_tensor_q \
+            ! queue name=decoded_video_tensor_q leaky=2 \
             ! videoscale \
-            ! {vconverter} \
-            ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height},format=RGB \
+            ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height} \
             ! tensor_converter \
             ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
             ! capsfilter caps=other/tensors,num_tensors=1,format=static \
-            ! queue name=tensor_filter_q leaky=2 max-size-buffers=10 \
             ! tensor_filter framework=tensorflow2-lite model={model_file} \
+            ! tensor_rate framerate={tensor_framerate}/1 throttle=true \
             ! tee name=tensor_t \
             ! queue name=tensor_decoder_q \
             ! tensor_decoder mode=bounding_boxes \
@@ -152,16 +140,10 @@ impl PipelineApp {
                 option3=0:1:2:3,{nms_threshold} \
                 option4={video_width}:{video_height} \
                 option5={tensor_width}:{tensor_height} \
-            ! videorate \
-            ! videoscale \
             ! {vconverter} \
-            ! video/x-raw,framerate={framerate}/1,width={video_width},height={video_height},format=RGBA \
-            ! queue name=compositor_q \
-            ! compositor name=comp sink_0::zorder=2 sink_1::zorder=1 \
             ! {h264_encoder} \
-            ! {h264_video_sinks} \
-            decoded_video_t. ! queue name=videoscale_q \
-            ! timeoverlay ! comp.sink_1 \
+            ! udpsink port={overlay_udp_port} \
+            decoded_video_t. ! queue name=h264queue ! {h264_encoder} ! {h264_video_sinks} \
             tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
             ! dataframe_agg filter-threshold=0.5 output-type=json \
             ! nats_sink nats-address={nats_server_uri} \
@@ -175,11 +157,15 @@ impl PipelineApp {
             video_height = &self.config.video_height,
             decoded_video_src = decoded_video_src,
             h264_video_sinks = h264_video_sinks,
-            framerate = &self.config.video_framerate,
+            video_framerate = &self.config.video_framerate,
             nats_server_uri = &self.config.nats_server_uri,
             vconverter = vconverter,
-            h264_encoder = h264_encoder
+            h264_encoder = h264_encoder,
+            tensor_framerate = &self.config.tflite_model.tensor_framerate,
+            overlay_udp_port = &self.config.overlay_udp_port
         );
+
+        warn!("Building pipeline: {}", pipeline_str);
 
         let pipeline = gst::parse_launch(&pipeline_str)?;
         let pipeline = pipeline.dynamic_cast::<gst::Pipeline>().unwrap();
@@ -260,6 +246,7 @@ fn main() {
         .arg(
             Arg::new("config")
                 .long("--config")
+                .short('c')
                 .takes_value(true)
                 .conflicts_with_all(&[
                     "hls_http_enabled",
@@ -322,10 +309,17 @@ fn main() {
                 .help("HTTP serving directory prefix (configured via Nginx)"),
         )
         .arg(
-            Arg::new("udp_port")
-                .long("--udp-port")
+            Arg::new("video_udp_port")
+                .long("--video-udp-port")
                 .takes_value(true)
                 .default_value("20001")
+                .help("Janus RTP stream port (UDP)"),
+        )
+        .arg(
+            Arg::new("overlay_udp_port")
+                .long("--overlay-udp-port")
+                .takes_value(true)
+                .default_value("20002")
                 .help("Janus RTP stream port (UDP)"),
         )
         // --nms-threshold
@@ -436,9 +430,8 @@ fn main() {
 
     let app = match args.value_of("config") {
         Some(config_file) => {
-            let config = PrintNannyConfig::from_toml(PathBuf::from(config_file))
-                .expect("Failed to extract config")
-                .vision;
+            let config = PrintNannyGstPipelineConfig::from_toml(PathBuf::from(config_file))
+                .expect("Failed to extract config");
             PipelineApp { config }
         }
         None => PipelineApp::from(&args),

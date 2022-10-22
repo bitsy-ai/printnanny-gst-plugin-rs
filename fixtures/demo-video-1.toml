@@ -1,0 +1,7 @@
+
+video_src = "/home/leigh/datasets/spaghetti/tmp2/Kqb1vveV7cs.mp4"
+video_src_type = "File"
+
+[tflite_model]
+model_file = "/home/leigh/projects/printnanny-gst-plugin/fixtures/model.tflite"
+label_file = "/home/leigh/projects/printnanny-gst-plugin/fixtures/labels.txt"

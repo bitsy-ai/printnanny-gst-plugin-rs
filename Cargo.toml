@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "printnanny-gst-plugin",
+    "printnanny-gst-config",
+]
+[build]
+targets = [
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+]
