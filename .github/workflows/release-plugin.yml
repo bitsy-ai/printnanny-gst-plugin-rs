@@ -1,7 +1,7 @@
 on:
   push:
     tags:
-      - "v*"
+      - "printnanny-gst-plugin-v*"
   workflow_dispatch:
     inputs:
       tag:
@@ -11,7 +11,7 @@ on:
 name: Publish
 env:
   BIN: libgstprintnanny.so printnanny-gst-pipeline
-  TAR: printnanny-gst-plugin
+  TAR: ${{  github.ref_name }}
   CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
 jobs:
