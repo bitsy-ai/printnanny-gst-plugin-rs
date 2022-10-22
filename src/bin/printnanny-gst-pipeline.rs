@@ -91,7 +91,7 @@ impl PipelineApp {
         match gst::ElementFactory::make("v4l2h264enc", None) {
             Ok(_) => {
                 info!("Detected v4l2 support, using v4l2h264enc element");
-                "v4l2h264enc extra-controls='controls,repeat_sequence_header=1' ! capsfilter caps=video/x-h264,level=(string)4".into()
+                "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\" ! capsfilter caps=video/x-h264,level=(string)4".into()
             }
             Err(_) => {
                 info!(
