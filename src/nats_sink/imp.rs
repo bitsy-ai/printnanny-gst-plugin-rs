@@ -87,7 +87,7 @@ impl ObjectImpl for NatsSink {
             "nats-subject" => {
                 settings.nats_subject = value.get::<String>().expect("type checked upstream");
             }
-            _ => unimplemented!(),
+            _ => unimplemented!("nats_sink does not implement property: {}", pspec.name()),
         };
     }
 
@@ -96,7 +96,8 @@ impl ObjectImpl for NatsSink {
 
         match pspec.name() {
             "nats-address" => settings.nats_address.to_value(),
-            _ => unimplemented!(),
+            "nats-subject" => settings.nats_subject.to_value(),
+            _ => unimplemented!("nats_sink does not implement property: {}", pspec.name()),
         }
     }
 }
