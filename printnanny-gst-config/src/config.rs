@@ -7,7 +7,7 @@ use log::{debug, info};
 
 use serde::{Deserialize, Serialize};
 
-use printnanny_services::error::{CommandError, ServiceError};
+use printnanny_services::error::CommandError;
 use printnanny_services::figment::providers::{Env, Format, Serialized, Toml};
 use printnanny_services::figment::value::{Dict, Map};
 use printnanny_services::figment::{Figment, Metadata, Profile, Provider};
@@ -273,7 +273,7 @@ impl PrintNannyGstPipelineConfig {
             .merge(Toml::file(Self::config_file()))
             // allow nested environment variables:
             // PRINTNANNY_GST_KEY__SUBKEY
-            .merge(Env::prefixed("PRINTNANNY_GST").split("__"));
+            .merge(Env::prefixed("PRINTNANNY_GST_").split("__"));
 
         info!("Finalized PrintNannyGstConfig: \n {:?}", result);
         Ok(result)
@@ -314,7 +314,7 @@ mod tests {
             let config_file = jail.directory().join("test.toml");
 
             jail.create_file(
-                config_file.display().to_string(),
+                "test.toml",
                 r#"
                 profile = "default"
 
