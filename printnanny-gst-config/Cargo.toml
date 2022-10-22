@@ -1,0 +1,23 @@
+[package]
+name = "printnanny-gst-config"
+description = "PrintNanny Gstreamer Plugin configuration helpers"
+version = "0.1.0"
+authors = ["Leigh Johnson <leigh@printnanny.ai>"]
+license-file = "LICENSE"
+rust-version = "1.64"
+edition = "2021"
+repository = "https://github.com/bitsy-ai/printnanny-gst-plugin-rs/"
+
+
+[dependencies]
+log = "0.4"
+clap = { version = "3", features = ["derive", "cargo", "env", "wrap_help"] }
+file-lock = "2.1.4"
+printnanny-services = { version = "0.27.3", package = "printnanny-services", git = "https://github.com/bitsy-ai/printnanny-cli.git"}
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.5"
+thiserror = "1.0.37"               # derive(Error)
+
+[dev-dependencies]
+figment = { version = "0.10", features = ["env", "json", "toml", "test"] }

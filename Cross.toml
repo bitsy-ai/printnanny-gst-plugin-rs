@@ -2,10 +2,6 @@
 image = "bitsyai/cross-rs:aarch64-unknown-linux-gnu-22.04"
 xargo = false
 
-[target.armv7-unknown-linux-gnueabihf]
-image = "bitsyai/cross-rs:armv7-unknown-linux-gnueabihf-22.04"
-xargo = false
-
 [target.x86_64-unknown-linux-gnu]
 image = "bitsyai/cross-rs:x86_64-unknown-linux-gnu-22.04"
 xargo = false

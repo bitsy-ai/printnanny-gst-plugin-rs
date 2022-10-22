@@ -1,10 +1,4 @@
-// Copyright (C) 2021 Rafael Caricio <rafael@caricio.com>
-//
-// This Source Code Form is subject to the terms of the Mozilla Public License, v2.0.
-// If a copy of the MPL was not distributed with this file, You can obtain one at
-// <https://mozilla.org/MPL/2.0/>.
-//
-// SPDX-License-Identifier: MPL-2.0
+// Copyright (C) 2022 Leigh Johnson <leigh@printnanny.ai>
 
 
 use gst::glib;
@@ -77,7 +71,7 @@ impl ObjectSubclass for DataframeFileSink {
         // let templ = klass.pad_template("src").unwrap();
         // let srcpad = gst::GhostPad::from_template(&templ, Some("src"));
 
-        let multifilesink = gst::ElementFactory::make("multifilesink", Some("dataframe_multifilesink")).unwrap();
+        let multifilesink = gst::ElementFactory::make_with_name("multifilesink", Some("dataframe_multifilesink")).unwrap();
 
 
         // Return an instance of our struct
