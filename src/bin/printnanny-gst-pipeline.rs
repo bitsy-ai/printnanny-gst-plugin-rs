@@ -95,9 +95,9 @@ impl PipelineApp {
             }
             Err(_) => {
                 info!(
-                    "Error making v4l2h264enc element, falling back to software-based x264 element"
+                    "Error making v4l2h264enc element, falling back to software-based x264enc element"
                 );
-                "x264 ! 'video/x-h264,level=(string)4'".into()
+                "x264enc ! 'video/x-h264,level=(string)4'".into()
             }
         }
     }
