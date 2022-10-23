@@ -60,86 +60,6 @@ pub struct PipelineApp {
 }
 
 impl PipelineApp {
-    fn decoded_video_src(&self) -> String {
-        let vconverter = self.detect_vconverter();
-        let video_height = &self.config.video_height;
-        let video_width = &self.config.video_width;
-
-        match self.config.video_src_type {
-            VideoSrcType::File => format!(
-                "filesrc location={video_src} do-timestamp=true ! qtdemux name=demux demux.video_0 ! decodebin ! tee name=decoded_video_t",
-                video_src = self.config.video_src,
-            ),
-            VideoSrcType::Device => format!(
-                "libcamerasrc ! video/x-raw,framerate={video_framerate}/1,width={video_width},height={video_height} ! {vconverter} ! tee name=decoded_video_t",
-                video_framerate = &self.config.video_framerate
-            ),
-            VideoSrcType::Uri => {
-                format!(
-                    "uridecodebin uri={video_src} caps=video/x-raw download=true ring-buffer-max-size=134217728 ! videoscale name=videoscale_input ! video/x-raw,width={video_width},height={video_height} ! tee name=decoded_video_t",
-                    video_src = self.config.video_src,
-                )
-            }
-        }
-    }
-
-    fn h264_video_sinks(&self) -> Result<String> {
-        let hls_http_enabled = match self.config.hls_http_enabled {
-            Some(value) => value,
-            None => self.config.detect_hls_http_enabled()?,
-        };
-        let result = match hls_http_enabled {
-            true => {
-                format!(
-                    "h264_video_t. ! queue name=h264_video_janus_q ! h264parse ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 ! udpsink port={udp_port} \
-                    h264_video_t. ! queue name=h264_video_hls_q ! hlssink2 location={hls_segment} playlist-location={hls_playlist} playlist-root={hls_playlist_root}",
-                    udp_port = &self.config.video_udp_port,
-                    hls_segment = &self.config.hls_segments,
-                    hls_playlist = &self.config.hls_playlist,
-                    hls_playlist_root = &self.config.hls_playlist_root
-                )
-            }
-            false => {
-                format!(
-                    "h264_video_t. ! queue name=h264_video_janus_q ! h264parse ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 ! udpsink port={udp_port}",
-                    udp_port = &self.config.video_udp_port,
-                )
-            }
-        };
-
-        Ok(result)
-    }
-
-    // detect hardware-accelerated video encoder available via video4linux
-    fn detect_h264_encoder(&self) -> String {
-        match gst::ElementFactory::make_with_name("v4l2h264enc", None) {
-            Ok(_) => {
-                info!("Detected v4l2 support, using v4l2h264enc element");
-                "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\" ! capsfilter caps=video/x-h264,level=3 ".into()
-            }
-            Err(_) => {
-                info!(
-                    "Error making v4l2h264enc element, falling back to software-based x264enc element"
-                );
-                "x264enc ! capsfilter caps=video/x-h264,level=3".into()
-            }
-        }
-    }
-
-    // detect hardware-accelerated video converter available via video4linux
-    fn detect_vconverter(&self) -> String {
-        match gst::ElementFactory::make_with_name("v4l2convert", None) {
-            Ok(_) => {
-                info!("Detected v4l2 support, using v4l2convert element");
-                "v4l2convert".into()
-            }
-            Err(_) => {
-                info!("Error making v4l2convert element, falling back to software-based videoconvert element");
-                "videoconvert".into()
-            }
-        }
-    }
-
     fn make_uri_pipeline(&self) -> Result<gst::Pipeline, Error> {
         let start = SystemTime::now();
         let ts = start
@@ -161,6 +81,14 @@ impl PipelineApp {
 
         let video_udp_port = self.config.video_udp_port.clone();
 
+        let video_width = self.config.video_width.clone();
+        let video_height = self.config.video_height.clone();
+        let tflite_model_file = self.config.tflite_model.model_file.clone();
+        let tensor_framerate = self.config.tflite_model.tensor_framerate.clone();
+        let tensor_height = self.config.tflite_model.tensor_height.clone();
+        let tensor_width = self.config.tflite_model.tensor_width.clone();
+        let video_framerate = self.config.video_framerate.clone();
+
         uriencodebin.connect_pad_added(move |dbin, src_pad| {
             warn!("src_pad added {:?}", src_pad);
             let pipeline = match pipeline_weak.upgrade() {
@@ -177,11 +105,19 @@ impl PipelineApp {
             // we call the insert_sink(..) closure.
             let insert_sink = || -> Result<(), Error> {
                 // decodebin found a raw videostream, so we build the follow-up pipeline to encode h264 video, rtp payload, and sink to janus gateway rtp ports
-                let queue = gst::ElementFactory::make("queue")
-                    .name("uridecodebin_after_q")
+
+                let inqueue = gst::ElementFactory::make("queue")
+                    .name("uridecodebin_q")
                     .build()?;
+
+                let h264_queue = gst::ElementFactory::make("queue").name("h264_q").build()?;
                 let converter = gst::ElementFactory::make("videoconvert").build()?;
                 let scaler = gst::ElementFactory::make("videoscale").build()?;
+                let videorate = gst::ElementFactory::make("videorate").build()?;
+
+                let video_tee = gst::ElementFactory::make("tee")
+                    .name("inputvideo_tee")
+                    .build()?;
 
                 let encoder = match gst::ElementFactory::make("v4l2h264enc")
                     .property_from_str("extra-controls", "controls,repeat_sequence_header=1")
@@ -206,19 +142,115 @@ impl PipelineApp {
                     .property("port", video_udp_port)
                     .build()?;
 
-                let elements = &[
-                    &queue, &converter, &scaler, &encoder, &parser, &payloader, &sink,
-                ];
-                pipeline.add_many(elements)?;
-                gst::Element::link_many(elements)?;
+                let raw_video_capsfilter = gst::ElementFactory::make("capsfilter")
+                    .name("tensor_rgb_capsfilter")
+                    .build()?;
+                raw_video_capsfilter.set_property(
+                    "caps",
+                    gst_video::VideoCapsBuilder::new()
+                        .width(video_width)
+                        .height(video_height)
+                        .framerate(video_framerate.into())
+                        .build(),
+                );
 
-                for e in elements {
+                let h264_video_elements = &[
+                    // &raw_rgb_capsfilter,
+                    // &inqueue,
+                    // &videorate,
+                    // &converter,
+                    // &scaler,
+                    &video_tee,
+                    &h264_queue,
+                    &encoder,
+                    &parser,
+                    &payloader,
+                    &sink,
+                ];
+                pipeline.add_many(h264_video_elements)?;
+                gst::Element::link_many(h264_video_elements)?;
+
+                let tensor_q = gst::ElementFactory::make("queue")
+                    .name("tensor_q")
+                    .property_from_str("leaky", "2")
+                    .build()?;
+
+                let tensor_vconverter = gst::ElementFactory::make("videoconvert")
+                    .name("tensor_videoconvert")
+                    .build()?;
+
+                let tensor_videorate = gst::ElementFactory::make("videorate")
+                    .name("tensor_videorate")
+                    .build()?;
+
+                let tensor_videoscale = gst::ElementFactory::make("videoscale").build()?;
+
+                let tensor_converter = gst::ElementFactory::make("tensor_converter").build()?;
+                let tensor_sink = gst::ElementFactory::make("tensor_sink").build()?;
+                let tensor_capsfilter = gst::ElementFactory::make("capsfilter")
+                    .name("tensor_capsfilter")
+                    .build()?;
+
+                tensor_capsfilter.set_property(
+                    "caps",
+                    gst::Caps::builder("other/tensors")
+                        .field("framerate", gst::Fraction::from(tensor_framerate))
+                        .field("format", "static")
+                        .build(),
+                );
+
+                let tensor_transform = gst::ElementFactory::make("tensor_transform")
+                    .property_from_str("mode", "arithmetic")
+                    .property_from_str("option", "typecast:uint8,add:0,div:1")
+                    .build()?;
+
+                let tensor_filter = gst::ElementFactory::make("tensor_filter")
+                    .property_from_str("framework", "tensorflow2-lite")
+                    .property_from_str("model", &tflite_model_file)
+                    .build()?;
+                let raw_rgb_capsfilter = gst::ElementFactory::make("capsfilter")
+                    .name("tensor_rgb_capsfilter")
+                    .build()?;
+
+                raw_rgb_capsfilter.set_property(
+                    "caps",
+                    gst_video::VideoCapsBuilder::new()
+                        .format(gst_video::VideoFormat::Rgb)
+                        .width(tensor_width)
+                        .height(tensor_height)
+                        .framerate(tensor_framerate.into())
+                        .build(),
+                );
+
+                // let tensor_rate = gst::ElementFactory::make("tensor_rate")
+
+                let tensor_pipeline_elements = &[
+                    &tensor_q,
+                    &tensor_vconverter,
+                    &tensor_videorate,
+                    &tensor_videoscale,
+                    &raw_rgb_capsfilter,
+                    &tensor_converter,
+                    &tensor_transform,
+                    // &tensor_capsfilter,
+                    &tensor_filter,
+                    &tensor_sink,
+                ];
+
+                pipeline.add_many(tensor_pipeline_elements)?;
+                gst::Element::link_many(&[&video_tee, &tensor_q])?;
+                gst::Element::link_many(tensor_pipeline_elements)?;
+
+                for e in h264_video_elements {
+                    e.sync_state_with_parent()?
+                }
+                for e in tensor_pipeline_elements {
                     e.sync_state_with_parent()?
                 }
 
-                // Get the queue element's sink pad and link the decodebin's newly created
+                // Get the video_tee element's sink pad and link the uridecodebin's newly created
                 // src pad for the video stream to it.
-                let sink_pad = queue.static_pad("sink").expect("queue has no sinkpad");
+                let sink_pad = video_tee.static_pad("sink").expect("tee has no sinkpad");
                 src_pad.link(&sink_pad)?;
 
                 Ok(())
