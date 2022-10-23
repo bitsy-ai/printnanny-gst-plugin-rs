@@ -28,16 +28,23 @@ pub struct PipelineApp {
 
 impl PipelineApp {
     fn decoded_video_src(&self) -> String {
+        let vconverter = self.detect_vconverter();
+
         match self.config.video_src_type {
             VideoSrcType::File => format!(
                 "filesrc location={video_src} do-timestamp=true ! qtdemux name=demux demux.video_0 ! decodebin",
-                video_src = self.config.video_src
+                video_src = self.config.video_src,
             ),
-            VideoSrcType::Device => "libcamerasrc".to_string(),
+            VideoSrcType::Device => format!(
+                "libcamerasrc ! video/x-raw,framerate={video_framerate}/1,width={video_width},height={video_height} ! {vconverter}",
+                video_width = &self.config.video_width,
+                video_height = &self.config.video_height,
+                video_framerate = &self.config.video_framerate
+            ),
             VideoSrcType::Uri => {
                 format!(
-                    "uridecodebin uri={video_src}",
-                    video_src = self.config.video_src
+                    "uridecodebin3 uri={video_src}",
+                    video_src = self.config.video_src,
                 )
             }
         }
@@ -81,13 +88,13 @@ impl PipelineApp {
         match gst::ElementFactory::make_with_name("v4l2h264enc", None) {
             Ok(_) => {
                 info!("Detected v4l2 support, using v4l2h264enc element");
-                "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\" ! capsfilter caps=video/x-h264,level=(string)4".into()
+                "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\" ! capsfilter caps=video/x-h264,level=4".into()
             }
             Err(_) => {
                 info!(
                     "Error making v4l2h264enc element, falling back to software-based x264enc element"
                 );
-                "x264enc ! capsfilter caps=video/x-h264,level=(string)4".into()
+                "x264enc ! capsfilter caps=video/x-h264,level=4".into()
             }
         }
     }
@@ -119,19 +126,16 @@ impl PipelineApp {
 
         let pipeline_str = format!(
             "{decoded_video_src} \
-            ! videorate \
-            ! videoscale \
-            ! {vconverter} \
-            ! video/x-raw,framerate={video_framerate}/1,width={video_width},height={video_height} \
             ! tee name=decoded_video_t \
             ! queue name=decoded_video_tensor_q leaky=2 \
+            ! {vconverter} \
             ! videoscale \
             ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height} \
             ! tensor_converter \
             ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
             ! capsfilter caps=other/tensors,num_tensors=1,format=static \
             ! tensor_filter framework=tensorflow2-lite model={model_file} \
-            ! tensor_rate framerate={tensor_framerate}/1 throttle=true \
+            ! tensor_rate framerate={tensor_framerate}/1 throttle=false \
             ! tee name=tensor_t \
             ! queue name=tensor_decoder_q \
             ! tensor_decoder mode=bounding_boxes \
@@ -140,8 +144,7 @@ impl PipelineApp {
                 option3=0:1:2:3,{nms_threshold} \
                 option4={video_width}:{video_height} \
                 option5={tensor_width}:{tensor_height} \
-            ! {vconverter} \
-            ! {h264_encoder} \
+            ! {vconverter} ! {h264_encoder} \
             ! udpsink port={overlay_udp_port} \
             decoded_video_t. ! queue name=h264queue ! {h264_encoder} ! {h264_video_sinks} \
             tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
@@ -157,7 +160,6 @@ impl PipelineApp {
             video_height = &self.config.video_height,
             decoded_video_src = decoded_video_src,
             h264_video_sinks = h264_video_sinks,
-            video_framerate = &self.config.video_framerate,
             nats_server_uri = &self.config.nats_server_uri,
             vconverter = vconverter,
             h264_encoder = h264_encoder,
