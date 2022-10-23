@@ -189,8 +189,8 @@ impl PipelineApp {
                 {
                     Ok(el) => el,
                     Err(_) => {
-                        warn!("v4l2h264enc not found, falling back to x264enc");
-                        gst::ElementFactory::make("x264enc").build()?
+                        warn!("v4l2h264enc not found, falling back to openh264enc");
+                        gst::ElementFactory::make("openh264enc").build()?
                     }
                 };
 
