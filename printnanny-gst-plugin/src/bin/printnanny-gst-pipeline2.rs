@@ -1,13 +1,23 @@
 // Build PrintNanny Gstreamer pipeline
 
-use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
-use env_logger::Builder;
-use gst::prelude::*;
+use std::fmt;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use gst::element_error;
+use gst::element_warning;
+use gst::glib;
+use gst::prelude::*;
 
 use anyhow::{Context, Error, Result};
+use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
+use env_logger::Builder;
+
 use git_version::git_version;
 use log::{error, info, warn, LevelFilter};
+use thiserror::Error;
+
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +30,29 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
         Some("PritnNanny demo video pipeline"),
     )
 });
+
+#[derive(Debug, Error)]
+struct ErrorMessage {
+    src: String,
+    error: String,
+    debug: Option<String>,
+    source: glib::Error,
+}
+
+impl fmt::Display for ErrorMessage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Use `self.number` to refer to each positional data point.
+        write!(
+            f,
+            "Received error from {}: {} (debug: {:?})",
+            self.src, self.error, self.debug
+        )
+    }
+}
+
+#[derive(Clone, Debug, glib::Boxed)]
+#[boxed_type(name = "ErrorValue")]
+struct ErrorValue(Arc<Mutex<Option<Error>>>);
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PipelineApp {
@@ -107,74 +140,136 @@ impl PipelineApp {
         }
     }
 
+    fn make_uri_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let start = SystemTime::now();
+        let ts = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards");
+        let pipeline_name = format!("pipeline-{:?}", &ts);
+
+        let pipeline = gst::Pipeline::new(Some(&pipeline_name));
+        let uriencodebin = gst::ElementFactory::make("uridecodebin3")
+            .property_from_str("caps", "video/x-raw")
+            .property("use-buffering", true)
+            // .property("async-handling", true)
+            .property("uri", &self.config.video_src)
+            .build()?;
+
+        pipeline.add_many(&[&uriencodebin])?;
+
+        let pipeline_weak = pipeline.downgrade();
+
+        let video_udp_port = self.config.video_udp_port.clone();
+
+        uriencodebin.connect_pad_added(move |dbin, src_pad| {
+            warn!("src_pad added {:?}", src_pad);
+            let pipeline = match pipeline_weak.upgrade() {
+                Some(p) => p,
+                None => {
+                    error!("Failed to upgrade pipeline reference");
+                    return;
+                }
+            };
+
+            // We create a closure here, calling it directly below it, because this greatly
+            // improves readability for error-handling. Like this, we can simply use the
+            // ?-operator within the closure, and handle the actual error down below where
+            // we call the insert_sink(..) closure.
+            let insert_sink = || -> Result<(), Error> {
+                // decodebin found a raw videostream, so we build the follow-up pipeline to encode h264 video, rtp payload, and sink to janus gateway rtp ports
+                let queue = gst::ElementFactory::make("queue")
+                    .name("uridecodebin_after_q")
+                    .build()?;
+                let converter = gst::ElementFactory::make("videoconvert").build()?;
+                let scaler = gst::ElementFactory::make("videoscale").build()?;
+
+                let encoder = match gst::ElementFactory::make("v4l2h264enc")
+                    .property_from_str("extra-controls", "controls,repeat_sequence_header=1")
+                    .build()
+                {
+                    Ok(el) => el,
+                    Err(_) => {
+                        warn!("v4l2h264enc not found, falling back to x264enc");
+                        gst::ElementFactory::make("x264enc").build()?
+                    }
+                };
+
+                let parser = gst::ElementFactory::make("h264parse").build()?;
+
+                let payloader = gst::ElementFactory::make("rtph264pay")
+                    .property("config-interval", 1)
+                    .property_from_str("aggregate-mode", "zero-latency")
+                    .property_from_str("pt", "96")
+                    .build()?;
+
+                let sink = gst::ElementFactory::make("udpsink")
+                    .property("port", video_udp_port)
+                    .build()?;
+
+                let elements = &[
+                    &queue, &converter, &scaler, &encoder, &parser, &payloader, &sink,
+                ];
+                pipeline.add_many(elements)?;
+                gst::Element::link_many(elements)?;
+
+                for e in elements {
+                    e.sync_state_with_parent()?
+                }
+
+                // Get the queue element's sink pad and link the decodebin's newly created
+                // src pad for the video stream to it.
+                let sink_pad = queue.static_pad("sink").expect("queue has no sinkpad");
+                src_pad.link(&sink_pad)?;
+
+                Ok(())
+            };
+
+            // When adding and linking new elements in a callback fails, error information is often sparse.
+            // GStreamer's built-in debugging can be hard to link back to the exact position within the code
+            // that failed. Since callbacks are called from random threads within the pipeline, it can get hard
+            // to get good error information. The macros used in the following can solve that. With the use
+            // of those, one can send arbitrary rust types (using the pipeline's bus) into the mainloop.
+            // What we send here is unpacked down below, in the iteration-code over sent bus-messages.
+            // Because we are using the failure crate for error details here, we even get a backtrace for
+            // where the error was constructed. (If RUST_BACKTRACE=1 is set)
+            if let Err(err) = insert_sink() {
+                // The following sends a message of type Error on the bus, containing our detailed
+                // error information.
+                element_error!(
+                    dbin,
+                    gst::LibraryError::Failed,
+                    ("Failed to insert sink"),
+                    details: gst::Structure::builder("error-details")
+                                .field("error",
+                                       &ErrorValue(Arc::new(Mutex::new(Some(err)))))
+                                .build()
+                );
+            }
+        });
+
+        Ok(pipeline)
+    }
+
     pub fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
         gst::init()?;
 
-        let decoded_video_src = self.decoded_video_src();
-
-        let h264_video_sinks = self.h264_video_sinks()?;
-
-        let vconverter = self.detect_vconverter();
-
-        let h264_encoder = self.detect_h264_encoder();
-
-        let pipeline_str = format!(
-            "{decoded_video_src} \
-            ! queue name=decoded_video_tensor_q leaky=2 \
-                ! videoscale=videoscale_tensor \
-                ! videoconvert \
-                ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height},format=RGBA \
-                ! tensor_converter \
-                ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
-                ! capsfilter caps=other/tensors,num_tensors=1,format=static \
-                ! tensor_filter framework=tensorflow2-lite model={model_file} \
-                ! tensor_rate framerate={tensor_framerate}/1 throttle=false \
-                ! tee name=tensor_t \
-                ! queue name=tensor_decoder_q \
-                ! tensor_decoder mode=bounding_boxes \
-                    option1=mobilenet-ssd-postprocess \
-                    option2={label_file} \
-                    option3=0:1:2:3,{nms_threshold} \
-                    option4={video_width}:{video_height} \
-                    option5={tensor_width}:{tensor_height} \
-                ! {vconverter} ! {h264_encoder} \
-                ! udpsink port={overlay_udp_port} \
-            decoded_video_t. ! queue name=h264queue ! {h264_encoder} ! tee name=h264_video_t \
-            tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
-            ! dataframe_agg filter-threshold=0.5 output-type=json \
-            ! nats_sink nats-address={nats_server_uri} {h264_video_sinks}",
-            tensor_height = &self.config.tflite_model.tensor_height,
-            tensor_width = &self.config.tflite_model.tensor_width,
-            model_file = &self.config.tflite_model.model_file,
-            label_file = &self.config.tflite_model.label_file,
-            nms_threshold = &self.config.tflite_model.nms_threshold,
-            video_width = &self.config.video_width,
-            video_height = &self.config.video_height,
-            decoded_video_src = decoded_video_src,
-            h264_video_sinks = h264_video_sinks,
-            nats_server_uri = &self.config.nats_server_uri,
-            vconverter = vconverter,
-            h264_encoder = h264_encoder,
-            tensor_framerate = &self.config.tflite_model.tensor_framerate,
-            overlay_udp_port = &self.config.overlay_udp_port
-        );
-
-        warn!("Building pipeline: {}", pipeline_str);
-
-        let pipeline = gst::parse_launch(&pipeline_str)?;
-        let pipeline = pipeline.dynamic_cast::<gst::Pipeline>().unwrap();
+        let pipeline = self.make_uri_pipeline()?;
 
         Ok(pipeline)
     }
 }
 
-fn run(pipeline: gst::Pipeline) -> Result<(), Error> {
+fn run(pipeline: gst::Pipeline) -> Result<()> {
     pipeline.set_state(gst::State::Playing)?;
 
     let bus = pipeline
         .bus()
         .expect("Pipeline without bus. Shouldn't happen!");
 
+    // This code iterates over all messages that are sent across our pipeline's bus.
+    // In the callback ("pad-added" on the decodebin), we sent better error information
+    // using a bus message. This is the position where we get those messages and log
+    // the contained information.
     for msg in bus.iter_timed(gst::ClockTime::NONE) {
         use gst::MessageView;
 
@@ -182,25 +277,47 @@ fn run(pipeline: gst::Pipeline) -> Result<(), Error> {
             MessageView::Eos(..) => break,
             MessageView::Error(err) => {
                 pipeline.set_state(gst::State::Null)?;
-                gst::error!(CAT, "demo-video pipeline failed with error: {:?}", err);
+
+                match err.details() {
+                    // This bus-message of type error contained our custom error-details struct
+                    // that we sent in the pad-added callback above. So we unpack it and log
+                    // the detailed error information here. details contains a glib::SendValue.
+                    // The unpacked error is the converted to a Result::Err, stopping the
+                    // application's execution.
+                    Some(details) if details.name() == "error-details" => details
+                        .get::<&ErrorValue>("error")
+                        .unwrap()
+                        .clone()
+                        .0
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .map(Result::Err)
+                        .expect("error-details message without actual error"),
+                    _ => Err(ErrorMessage {
+                        src: msg
+                            .src()
+                            .map(|s| String::from(s.path_string()))
+                            .unwrap_or_else(|| String::from("None")),
+                        error: err.error().to_string(),
+                        debug: err.debug(),
+                        source: err.error(),
+                    }
+                    .into()),
+                }?;
             }
-            MessageView::StateChanged(state_changed) => {
-                gst::info!(
-                    CAT,
-                    "Setting pipeline {:?} state to {:?}",
-                    pipeline,
-                    &state_changed
-                );
-                if state_changed.src().map(|s| s == pipeline).unwrap_or(false) {
-                    pipeline.debug_to_dot_file(
-                        gst::DebugGraphDetails::VERBOSE,
-                        format!(
-                            "{}-{:?}-{:?}",
-                            pipeline.name(),
-                            &state_changed.old(),
-                            &state_changed.current()
-                        ),
+            MessageView::StateChanged(s) => {
+                let filename = format!("{}-{:?}-{:?}", pipeline.name(), &s.old(), &s.current());
+                if s.src().map(|s| s == pipeline).unwrap_or(false) {
+                    info!(
+                        "State changed from {:?}: {:?} -> {:?} ({:?})",
+                        s.src().map(|s| s.path_string()),
+                        s.old(),
+                        s.current(),
+                        s.pending()
                     );
+                    pipeline.debug_to_dot_file(gst::DebugGraphDetails::VERBOSE, &filename);
+                    info!("Wrote {}", &filename);
                 }
             }
             _ => (),

@@ -35,7 +35,7 @@ pub struct TfliteModelConfig {
     pub tensor_channels: i32,
     pub tensor_height: i32,
     pub tensor_width: i32,
-    pub tensor_framerate: u16,
+    pub tensor_framerate: i32,
 }
 
 impl Default for TfliteModelConfig {
@@ -79,8 +79,8 @@ impl From<&ArgMatches> for TfliteModelConfig {
             .value_of_t::<i32>("tensor_channels")
             .expect("--tensor-channels must be an integer");
 
-        let tensor_framerate: u16 = args
-            .value_of_t::<u16>("tensor_framerate")
+        let tensor_framerate: i32 = args
+            .value_of_t::<i32>("tensor_framerate")
             .expect("--tensor-framerate must be an integer");
 
         let nms_threshold: i32 = args
@@ -105,8 +105,8 @@ pub struct PrintNannyGstPipelineConfig {
     pub video_src: String,
     pub preview: bool,
     pub nats_server_uri: String,
-    pub overlay_udp_port: u16,
-    pub video_udp_port: u16,
+    pub overlay_udp_port: i32,
+    pub video_udp_port: i32,
     pub video_height: i32,
     pub video_width: i32,
     pub video_framerate: i32,
@@ -195,11 +195,11 @@ impl From<&ArgMatches> for PrintNannyGstPipelineConfig {
             .value_of_t::<i32>("video_width")
             .expect("--video-width must be an integer");
 
-        let video_udp_port: u16 = args
+        let video_udp_port: i32 = args
             .value_of_t("video_udp_port")
             .expect("--video-udp-port must be an integer");
 
-        let overlay_udp_port: u16 = args
+        let overlay_udp_port: i32 = args
             .value_of_t("overlay_udp_port")
             .expect("--overlay-udp-port must be an integer");
 
