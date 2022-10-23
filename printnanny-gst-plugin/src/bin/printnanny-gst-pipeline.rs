@@ -29,21 +29,21 @@ pub struct PipelineApp {
 impl PipelineApp {
     fn decoded_video_src(&self) -> String {
         let vconverter = self.detect_vconverter();
+        let video_height = &self.config.video_height;
+        let video_width = &self.config.video_width;
 
         match self.config.video_src_type {
             VideoSrcType::File => format!(
-                "filesrc location={video_src} do-timestamp=true ! qtdemux name=demux demux.video_0 ! decodebin",
+                "filesrc location={video_src} do-timestamp=true ! qtdemux name=demux demux.video_0 ! decodebin ! tee name=decoded_video_t",
                 video_src = self.config.video_src,
             ),
             VideoSrcType::Device => format!(
-                "libcamerasrc ! video/x-raw,framerate={video_framerate}/1,width={video_width},height={video_height} ! {vconverter}",
-                video_width = &self.config.video_width,
-                video_height = &self.config.video_height,
+                "libcamerasrc ! video/x-raw,framerate={video_framerate}/1,width={video_width},height={video_height} ! {vconverter} ! tee name=decoded_video_t",
                 video_framerate = &self.config.video_framerate
             ),
             VideoSrcType::Uri => {
                 format!(
-                    "uridecodebin3 uri={video_src}",
+                    "uridecodebin uri={video_src} caps=video/x-raw download=true ring-buffer-max-size=134217728 ! videoscale ! video/x-raw,width={video_width},height={video_height} ! tee name=decoded_video_t",
                     video_src = self.config.video_src,
                 )
             }
@@ -58,12 +58,8 @@ impl PipelineApp {
         let result = match hls_http_enabled {
             true => {
                 format!(
-                    "tee name=h264_composite_video_t \
-                    ! queue \
-                    ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
-                    ! udpsink port={udp_port} \
-                    h264_composite_video_t. ! queue ! hlssink2 location={hls_segment} playlist-location={hls_playlist} playlist-root={hls_playlist_root} \
-                    ",
+                    "h264_video_t. ! queue name=h264_video_janus_q ! h264parse ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 ! udpsink port={udp_port} \
+                    h264_video_t. ! queue name=h264_video_hls_q ! hlssink2 location={hls_segment} playlist-location={hls_playlist} playlist-root={hls_playlist_root}",
                     udp_port = &self.config.video_udp_port,
                     hls_segment = &self.config.hls_segments,
                     hls_playlist = &self.config.hls_playlist,
@@ -72,9 +68,7 @@ impl PipelineApp {
             }
             false => {
                 format!(
-                    "rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
-                    ! udpsink port={udp_port} \
-                    ",
+                    "h264_video_t. ! queue name=h264_video_janus_q ! h264parse ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 ! udpsink port={udp_port}",
                     udp_port = &self.config.video_udp_port,
                 )
             }
@@ -88,13 +82,13 @@ impl PipelineApp {
         match gst::ElementFactory::make_with_name("v4l2h264enc", None) {
             Ok(_) => {
                 info!("Detected v4l2 support, using v4l2h264enc element");
-                "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\" ! capsfilter caps=video/x-h264,level=4".into()
+                "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\" ! capsfilter caps=video/x-h264,level=3 ".into()
             }
             Err(_) => {
                 info!(
                     "Error making v4l2h264enc element, falling back to software-based x264enc element"
                 );
-                "x264enc ! capsfilter caps=video/x-h264,level=4".into()
+                "x264enc ! capsfilter caps=video/x-h264,level=3".into()
             }
         }
     }
@@ -126,31 +120,29 @@ impl PipelineApp {
 
         let pipeline_str = format!(
             "{decoded_video_src} \
-            ! tee name=decoded_video_t \
-            ! queue name=decoded_video_tensor_q leaky=2 \
-            ! {vconverter} \
-            ! videoscale \
-            ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height} \
-            ! tensor_converter \
-            ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
-            ! capsfilter caps=other/tensors,num_tensors=1,format=static \
-            ! tensor_filter framework=tensorflow2-lite model={model_file} \
-            ! tensor_rate framerate={tensor_framerate}/1 throttle=false \
-            ! tee name=tensor_t \
-            ! queue name=tensor_decoder_q \
-            ! tensor_decoder mode=bounding_boxes \
-                option1=mobilenet-ssd-postprocess \
-                option2={label_file} \
-                option3=0:1:2:3,{nms_threshold} \
-                option4={video_width}:{video_height} \
-                option5={tensor_width}:{tensor_height} \
-            ! {vconverter} ! {h264_encoder} \
-            ! udpsink port={overlay_udp_port} \
-            decoded_video_t. ! queue name=h264queue ! {h264_encoder} ! {h264_video_sinks} \
+            decoded_video_t. ! queue name=decoded_video_tensor_q leaky=2 \
+                ! videoscale \
+                ! videoconvert \
+                ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height},format=RGBA \
+                ! tensor_converter \
+                ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
+                ! capsfilter caps=other/tensors,num_tensors=1,format=static \
+                ! tensor_filter framework=tensorflow2-lite model={model_file} \
+                ! tensor_rate framerate={tensor_framerate}/1 throttle=false \
+                ! tee name=tensor_t \
+                ! queue name=tensor_decoder_q \
+                ! tensor_decoder mode=bounding_boxes \
+                    option1=mobilenet-ssd-postprocess \
+                    option2={label_file} \
+                    option3=0:1:2:3,{nms_threshold} \
+                    option4={video_width}:{video_height} \
+                    option5={tensor_width}:{tensor_height} \
+                ! {vconverter} ! {h264_encoder} \
+                ! udpsink port={overlay_udp_port} \
+            decoded_video_t. ! queue name=h264queue ! {h264_encoder} ! tee name=h264_video_t \
             tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
             ! dataframe_agg filter-threshold=0.5 output-type=json \
-            ! nats_sink nats-address={nats_server_uri} \
-            ",
+            ! nats_sink nats-address={nats_server_uri} {h264_video_sinks}",
             tensor_height = &self.config.tflite_model.tensor_height,
             tensor_width = &self.config.tflite_model.tensor_width,
             model_file = &self.config.tflite_model.model_file,
