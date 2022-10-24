@@ -1,13 +1,23 @@
 // Build PrintNanny Gstreamer pipeline
 
-use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
-use env_logger::Builder;
-use gst::prelude::*;
+use std::fmt;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use gst::element_error;
+use gst::element_warning;
+use gst::glib;
+use gst::prelude::*;
 
 use anyhow::{Context, Error, Result};
+use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
+use env_logger::Builder;
+
 use git_version::git_version;
 use log::{error, info, warn, LevelFilter};
+use thiserror::Error;
+
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
@@ -21,166 +31,580 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     )
 });
 
+#[derive(Debug, Error)]
+struct ErrorMessage {
+    src: String,
+    error: String,
+    debug: Option<String>,
+    source: glib::Error,
+}
+
+impl fmt::Display for ErrorMessage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Use `self.number` to refer to each positional data point.
+        write!(
+            f,
+            "Received error from {}: {} (debug: {:?})",
+            self.src, self.error, self.debug
+        )
+    }
+}
+
+#[derive(Clone, Debug, glib::Boxed)]
+#[boxed_type(name = "ErrorValue")]
+struct ErrorValue(Arc<Mutex<Option<Error>>>);
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PipelineApp {
     config: PrintNannyGstPipelineConfig,
 }
 
 impl PipelineApp {
-    fn decoded_video_src(&self) -> String {
-        match self.config.video_src_type {
-            VideoSrcType::File => format!(
-                "filesrc location={video_src} do-timestamp=true ! qtdemux name=demux demux.video_0 ! decodebin",
-                video_src = self.config.video_src
-            ),
-            VideoSrcType::Device => "libcamerasrc".to_string(),
-            VideoSrcType::Uri => {
-                format!(
-                    "uridecodebin uri={video_src}",
-                    video_src = self.config.video_src
-                )
-            }
-        }
-    }
+    fn make_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let start = SystemTime::now();
+        let ts = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards, we've got bigger problems");
+        let pipeline_name = format!("pipeline-{:?}", &ts);
 
-    fn h264_video_sinks(&self) -> Result<String> {
-        let hls_http_enabled = match self.config.hls_http_enabled {
-            Some(value) => value,
-            None => self.config.detect_hls_http_enabled()?,
-        };
-        let result = match hls_http_enabled {
-            true => {
-                format!(
-                    "tee name=h264_composite_video_t \
-                    ! queue \
-                    ! rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
-                    ! udpsink port={udp_port} \
-                    h264_composite_video_t. ! queue ! hlssink2 location={hls_segment} playlist-location={hls_playlist} playlist-root={hls_playlist_root} \
-                    ",
-                    udp_port = &self.config.video_udp_port,
-                    hls_segment = &self.config.hls_segments,
-                    hls_playlist = &self.config.hls_playlist,
-                    hls_playlist_root = &self.config.hls_playlist_root
-                )
-            }
-            false => {
-                format!(
-                    "rtph264pay config-interval=1 aggregate-mode=zero-latency pt=96 \
-                    ! udpsink port={udp_port} \
-                    ",
-                    udp_port = &self.config.video_udp_port,
-                )
-            }
-        };
+        let pipeline = gst::Pipeline::new(Some(&pipeline_name));
+        let videosrc = gst::ElementFactory::make("libcamerasrc").build()?;
 
-        Ok(result)
-    }
+        let video_udp_port = self.config.video_udp_port.clone();
+        let video_width = self.config.video_width.clone();
+        let video_height = self.config.video_height.clone();
+        let tflite_model_file = self.config.tflite_model.model_file.clone();
+        let tensor_framerate = self.config.tflite_model.tensor_framerate.clone();
+        let tensor_height = self.config.tflite_model.tensor_height.clone();
+        let tensor_width = self.config.tflite_model.tensor_width.clone();
+        let video_framerate = self.config.video_framerate.clone();
+        let tflite_label_file = self.config.tflite_model.label_file.clone();
+        let nms_threshold = self.config.tflite_model.nms_threshold.clone();
+        let overlay_udp_port = self.config.overlay_udp_port.clone();
+        let nats_server_uri = self.config.nats_server_uri.clone();
 
-    // detect hardware-accelerated video encoder available via video4linux
-    fn detect_h264_encoder(&self) -> String {
-        match gst::ElementFactory::make_with_name("v4l2h264enc", None) {
-            Ok(_) => {
-                info!("Detected v4l2 support, using v4l2h264enc element");
-                "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\" ! capsfilter caps=video/x-h264,level=(string)4".into()
-            }
+        let h264_queue = gst::ElementFactory::make("queue").name("h264_q").build()?;
+
+        let video_tee = gst::ElementFactory::make("tee")
+            .name("inputvideo_tee")
+            .build()?;
+
+        let encoder = match gst::ElementFactory::make("v4l2h264enc")
+            .property_from_str("extra-controls", "controls,repeat_sequence_header=1")
+            .build()
+        {
+            Ok(el) => el,
             Err(_) => {
-                info!(
-                    "Error making v4l2h264enc element, falling back to software-based x264enc element"
+                warn!("v4l2h264enc not found, falling back to openh264enc");
+                gst::ElementFactory::make("openh264enc").build()?
+            }
+        };
+
+        let parser = gst::ElementFactory::make("h264parse").build()?;
+
+        let payloader = gst::ElementFactory::make("rtph264pay")
+            .property("config-interval", 1)
+            .property_from_str("aggregate-mode", "zero-latency")
+            .property_from_str("pt", "96")
+            .build()?;
+
+        let sink = gst::ElementFactory::make("udpsink")
+            .name("video_udpsink")
+            .property("port", video_udp_port)
+            .build()?;
+
+        let raw_video_capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("tensor_rgb_capsfilter")
+            .build()?;
+        raw_video_capsfilter.set_property(
+            "caps",
+            gst_video::VideoCapsBuilder::new()
+                .width(video_width)
+                .height(video_height)
+                .framerate(video_framerate.into())
+                .build(),
+        );
+
+        let h264_video_elements = &[
+            &videosrc,
+            &video_tee,
+            &h264_queue,
+            &encoder,
+            &parser,
+            &payloader,
+            &sink,
+        ];
+        pipeline.add_many(h264_video_elements)?;
+        gst::Element::link_many(h264_video_elements)?;
+
+        let tensor_q = gst::ElementFactory::make("queue")
+            .name("tensor_q")
+            .property_from_str("leaky", "2")
+            .build()?;
+
+        let tensor_vconverter = gst::ElementFactory::make("videoconvert")
+            .name("tensor_videoconvert")
+            .build()?;
+
+        let tensor_videorate = gst::ElementFactory::make("videorate")
+            .name("tensor_videorate")
+            .build()?;
+
+        let tensor_videoscale = gst::ElementFactory::make("videoscale").build()?;
+
+        let tensor_converter = gst::ElementFactory::make("tensor_converter").build()?;
+        let tensor_capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("tensor_capsfilter")
+            .build()?;
+
+        tensor_capsfilter.set_property(
+            "caps",
+            gst::Caps::builder("other/tensors")
+                .field("framerate", gst::Fraction::from(tensor_framerate))
+                .field("format", "static")
+                .build(),
+        );
+
+        let tensor_transform = gst::ElementFactory::make("tensor_transform")
+            .property_from_str("mode", "arithmetic")
+            .property_from_str("option", "typecast:uint8,add:0,div:1")
+            .build()?;
+
+        let tensor_filter = gst::ElementFactory::make("tensor_filter")
+            .property_from_str("framework", "tensorflow2-lite")
+            .property_from_str("model", &tflite_model_file)
+            .build()?;
+        let raw_rgb_capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("tensor_rgb_capsfilter")
+            .build()?;
+
+        raw_rgb_capsfilter.set_property(
+            "caps",
+            gst_video::VideoCapsBuilder::new()
+                .format(gst_video::VideoFormat::Rgb)
+                .width(tensor_width)
+                .height(tensor_height)
+                .framerate(tensor_framerate.into())
+                .build(),
+        );
+
+        let tflite_output_tee = gst::ElementFactory::make("tee")
+            .name("tflite_output_tee")
+            .build()?;
+
+        let tensor_pipeline_elements = &[
+            &tensor_q,
+            &tensor_vconverter,
+            &tensor_videorate,
+            &tensor_videoscale,
+            &raw_rgb_capsfilter,
+            &tensor_converter,
+            &tensor_transform,
+            &tensor_capsfilter,
+            &tensor_filter,
+            &tflite_output_tee,
+        ];
+        pipeline.add_many(tensor_pipeline_elements)?;
+        gst::Element::link_many(&[&video_tee, &tensor_q])?;
+        gst::Element::link_many(tensor_pipeline_elements)?;
+
+        let box_decoder_q = gst::ElementFactory::make("queue")
+            .name("box_decoder_q")
+            .build()?;
+        let box_decoder = gst::ElementFactory::make("tensor_decoder")
+            .name("box_decoder")
+            .property_from_str("mode", "bounding_boxes")
+            .property_from_str("option1", "mobilenet-ssd-postprocess")
+            .property_from_str("option2", &tflite_label_file)
+            .property_from_str("option3", &format!("0:1:2:3,{}", nms_threshold))
+            .property_from_str("option4", &format!("{video_width}:{video_height}"))
+            .property_from_str("option5", &format!("{tensor_width}:{tensor_height}"))
+            .build()?;
+        let box_videoconverter = gst::ElementFactory::make("videoconvert")
+            .name("box_videoconvert")
+            .build()?;
+
+        let box_h264encoder = match gst::ElementFactory::make("v4l2h264enc")
+            .property_from_str("extra-controls", "controls,repeat_sequence_header=1")
+            .build()
+        {
+            Ok(el) => el,
+            Err(_) => {
+                warn!("v4l2h264enc not found, falling back to openh264enc");
+                gst::ElementFactory::make("openh264enc").build()?
+            }
+        };
+
+        let box_udpsink = gst::ElementFactory::make("udpsink")
+            .name("boxoverlay_udpsink")
+            .property("port", overlay_udp_port)
+            .build()?;
+
+        let df_decoder_q = gst::ElementFactory::make("queue")
+            .name("df_decoder_q")
+            .build()?;
+
+        let box_overlay_elements = &[
+            &box_decoder_q,
+            &box_decoder,
+            &box_videoconverter,
+            &box_h264encoder,
+            &box_udpsink,
+        ];
+
+        let dataframe_decoder = gst::ElementFactory::make("tensor_decoder")
+            .name("df_tensor_decoder")
+            .property("mode", "custom-code")
+            .property("option1", "printnanny_bb_dataframe_decoder")
+            .build()?;
+
+        let dataframe_agg = gst::ElementFactory::make("dataframe_agg")
+            .name("df_agg")
+            .property("filter-threshold", nms_threshold as f32 / 100 as f32)
+            .property_from_str("output-type", "json")
+            .build()?;
+
+        let nats_sink = gst::ElementFactory::make("nats_sink")
+            .property("nats-address", &nats_server_uri)
+            .build()?;
+
+        let df_elements = &[
+            &df_decoder_q,
+            &dataframe_decoder,
+            &dataframe_agg,
+            &nats_sink,
+        ];
+
+        pipeline.add_many(box_overlay_elements)?;
+        pipeline.add_many(df_elements)?;
+        gst::Element::link_many(&[&tflite_output_tee, &box_decoder_q])?;
+        gst::Element::link_many(box_overlay_elements)?;
+        gst::Element::link_many(&[&tflite_output_tee, &df_decoder_q])?;
+        gst::Element::link_many(df_elements)?;
+
+        Ok(pipeline)
+    }
+
+    fn make_uri_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let start = SystemTime::now();
+        let ts = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards, we've got bigger problems");
+        let pipeline_name = format!("pipeline-{:?}", &ts);
+
+        let pipeline = gst::Pipeline::new(Some(&pipeline_name));
+        let uriencodebin = gst::ElementFactory::make("uridecodebin3")
+            .property_from_str("caps", "video/x-raw")
+            .property("use-buffering", true)
+            .property("uri", &self.config.video_src)
+            .build()?;
+
+        pipeline.add_many(&[&uriencodebin])?;
+
+        let pipeline_weak = pipeline.downgrade();
+
+        let video_udp_port = self.config.video_udp_port.clone();
+
+        let video_width = self.config.video_width.clone();
+        let video_height = self.config.video_height.clone();
+        let tflite_model_file = self.config.tflite_model.model_file.clone();
+        let tensor_framerate = self.config.tflite_model.tensor_framerate.clone();
+        let tensor_height = self.config.tflite_model.tensor_height.clone();
+        let tensor_width = self.config.tflite_model.tensor_width.clone();
+        let video_framerate = self.config.video_framerate.clone();
+        let tflite_label_file = self.config.tflite_model.label_file.clone();
+        let nms_threshold = self.config.tflite_model.nms_threshold.clone();
+        let overlay_udp_port = self.config.overlay_udp_port.clone();
+        let nats_server_uri = self.config.nats_server_uri.clone();
+
+        uriencodebin.connect_pad_added(move |dbin, src_pad| {
+            warn!("src_pad added {:?}", src_pad);
+            let pipeline = match pipeline_weak.upgrade() {
+                Some(p) => p,
+                None => {
+                    error!("Failed to upgrade pipeline reference");
+                    return;
+                }
+            };
+
+            // We create a closure here, calling it directly below it, because this greatly
+            // improves readability for error-handling. Like this, we can simply use the
+            // ?-operator within the closure, and handle the actual error down below where
+            // we call the insert_sink(..) closure.
+            let insert_sink = || -> Result<(), Error> {
+                // decodebin found a raw videostream, so we build the follow-up pipeline to encode h264 video, rtp payload, and sink to janus gateway rtp ports
+
+                let h264_queue = gst::ElementFactory::make("queue").name("h264_q").build()?;
+
+                let video_tee = gst::ElementFactory::make("tee")
+                    .name("inputvideo_tee")
+                    .build()?;
+
+                let encoder = match gst::ElementFactory::make("v4l2h264enc")
+                    .property_from_str("extra-controls", "controls,repeat_sequence_header=1")
+                    .build()
+                {
+                    Ok(el) => el,
+                    Err(_) => {
+                        warn!("v4l2h264enc not found, falling back to openh264enc");
+                        gst::ElementFactory::make("openh264enc").build()?
+                    }
+                };
+
+                let parser = gst::ElementFactory::make("h264parse").build()?;
+
+                let payloader = gst::ElementFactory::make("rtph264pay")
+                    .property("config-interval", 1)
+                    .property_from_str("aggregate-mode", "zero-latency")
+                    .property_from_str("pt", "96")
+                    .build()?;
+
+                let sink = gst::ElementFactory::make("udpsink")
+                    .name("video_udpsink")
+                    .property("port", video_udp_port)
+                    .build()?;
+
+                let raw_video_capsfilter = gst::ElementFactory::make("capsfilter")
+                    .name("tensor_rgb_capsfilter")
+                    .build()?;
+                raw_video_capsfilter.set_property(
+                    "caps",
+                    gst_video::VideoCapsBuilder::new()
+                        .width(video_width)
+                        .height(video_height)
+                        .framerate(video_framerate.into())
+                        .build(),
                 );
-                "x264enc ! capsfilter caps=video/x-h264,level=(string)4".into()
-            }
-        }
-    }
 
-    // detect hardware-accelerated video converter available via video4linux
-    fn detect_vconverter(&self) -> String {
-        match gst::ElementFactory::make_with_name("v4l2convert", None) {
-            Ok(_) => {
-                info!("Detected v4l2 support, using v4l2convert element");
-                "v4l2convert".into()
+                let h264_video_elements = &[
+                    &video_tee,
+                    &h264_queue,
+                    &encoder,
+                    &parser,
+                    &payloader,
+                    &sink,
+                ];
+                pipeline.add_many(h264_video_elements)?;
+                gst::Element::link_many(h264_video_elements)?;
+
+                let tensor_q = gst::ElementFactory::make("queue")
+                    .name("tensor_q")
+                    .property_from_str("leaky", "2")
+                    .build()?;
+
+                let tensor_vconverter = gst::ElementFactory::make("videoconvert")
+                    .name("tensor_videoconvert")
+                    .build()?;
+
+                let tensor_videorate = gst::ElementFactory::make("videorate")
+                    .name("tensor_videorate")
+                    .build()?;
+
+                let tensor_videoscale = gst::ElementFactory::make("videoscale").build()?;
+
+                let tensor_converter = gst::ElementFactory::make("tensor_converter").build()?;
+                let tensor_capsfilter = gst::ElementFactory::make("capsfilter")
+                    .name("tensor_capsfilter")
+                    .build()?;
+
+                tensor_capsfilter.set_property(
+                    "caps",
+                    gst::Caps::builder("other/tensors")
+                        .field("framerate", gst::Fraction::from(tensor_framerate))
+                        .field("format", "static")
+                        .build(),
+                );
+
+                let tensor_transform = gst::ElementFactory::make("tensor_transform")
+                    .property_from_str("mode", "arithmetic")
+                    .property_from_str("option", "typecast:uint8,add:0,div:1")
+                    .build()?;
+
+                let tensor_filter = gst::ElementFactory::make("tensor_filter")
+                    .property_from_str("framework", "tensorflow2-lite")
+                    .property_from_str("model", &tflite_model_file)
+                    .build()?;
+                let raw_rgb_capsfilter = gst::ElementFactory::make("capsfilter")
+                    .name("tensor_rgb_capsfilter")
+                    .build()?;
+
+                raw_rgb_capsfilter.set_property(
+                    "caps",
+                    gst_video::VideoCapsBuilder::new()
+                        .format(gst_video::VideoFormat::Rgb)
+                        .width(tensor_width)
+                        .height(tensor_height)
+                        .framerate(tensor_framerate.into())
+                        .build(),
+                );
+
+                let tflite_output_tee = gst::ElementFactory::make("tee")
+                    .name("tflite_output_tee")
+                    .build()?;
+
+                let tensor_pipeline_elements = &[
+                    &tensor_q,
+                    &tensor_vconverter,
+                    &tensor_videorate,
+                    &tensor_videoscale,
+                    &raw_rgb_capsfilter,
+                    &tensor_converter,
+                    &tensor_transform,
+                    &tensor_capsfilter,
+                    &tensor_filter,
+                    &tflite_output_tee,
+                ];
+                pipeline.add_many(tensor_pipeline_elements)?;
+                gst::Element::link_many(&[&video_tee, &tensor_q])?;
+                gst::Element::link_many(tensor_pipeline_elements)?;
+
+                let box_decoder_q = gst::ElementFactory::make("queue")
+                    .name("box_decoder_q")
+                    .build()?;
+                let box_decoder = gst::ElementFactory::make("tensor_decoder")
+                    .name("box_decoder")
+                    .property_from_str("mode", "bounding_boxes")
+                    .property_from_str("option1", "mobilenet-ssd-postprocess")
+                    .property_from_str("option2", &tflite_label_file)
+                    .property_from_str("option3", &format!("0:1:2:3,{}", nms_threshold))
+                    .property_from_str("option4", &format!("{video_width}:{video_height}"))
+                    .property_from_str("option5", &format!("{tensor_width}:{tensor_height}"))
+                    .build()?;
+                let box_videoconverter = gst::ElementFactory::make("videoconvert")
+                    .name("box_videoconvert")
+                    .build()?;
+
+                let box_h264encoder = match gst::ElementFactory::make("v4l2h264enc")
+                    .property_from_str("extra-controls", "controls,repeat_sequence_header=1")
+                    .build()
+                {
+                    Ok(el) => el,
+                    Err(_) => {
+                        warn!("v4l2h264enc not found, falling back to openh264enc");
+                        gst::ElementFactory::make("openh264enc").build()?
+                    }
+                };
+
+                let box_udpsink = gst::ElementFactory::make("udpsink")
+                    .name("boxoverlay_udpsink")
+                    .property("port", overlay_udp_port)
+                    .build()?;
+
+                let df_decoder_q = gst::ElementFactory::make("queue")
+                    .name("df_decoder_q")
+                    .build()?;
+
+                let box_overlay_elements = &[
+                    &box_decoder_q,
+                    &box_decoder,
+                    &box_videoconverter,
+                    &box_h264encoder,
+                    &box_udpsink,
+                ];
+
+                let dataframe_decoder = gst::ElementFactory::make("tensor_decoder")
+                    .name("df_tensor_decoder")
+                    .property("mode", "custom-code")
+                    .property("option1", "printnanny_bb_dataframe_decoder")
+                    .build()?;
+
+                let dataframe_agg = gst::ElementFactory::make("dataframe_agg")
+                    .name("df_agg")
+                    .property("filter-threshold", nms_threshold as f32 / 100 as f32)
+                    .property_from_str("output-type", "json")
+                    .build()?;
+
+                let nats_sink = gst::ElementFactory::make("nats_sink")
+                    .property("nats-address", &nats_server_uri)
+                    .build()?;
+
+                let df_elements = &[
+                    &df_decoder_q,
+                    &dataframe_decoder,
+                    &dataframe_agg,
+                    &nats_sink,
+                ];
+
+                pipeline.add_many(box_overlay_elements)?;
+                pipeline.add_many(df_elements)?;
+                gst::Element::link_many(&[&tflite_output_tee, &box_decoder_q])?;
+                gst::Element::link_many(box_overlay_elements)?;
+                gst::Element::link_many(&[&tflite_output_tee, &df_decoder_q])?;
+                gst::Element::link_many(df_elements)?;
+
+                for e in h264_video_elements {
+                    e.sync_state_with_parent()?
+                }
+                for e in tensor_pipeline_elements {
+                    e.sync_state_with_parent()?
+                }
+
+                for e in box_overlay_elements {
+                    e.sync_state_with_parent()?
+                }
+
+                for e in df_elements {
+                    e.sync_state_with_parent()?
+                }
+
+                // Get the video_tee element's sink pad and link the uridecodebin's newly created
+                // src pad for the video stream to it.
+                let sink_pad = video_tee.static_pad("sink").expect("tee has no sinkpad");
+                src_pad.link(&sink_pad)?;
+
+                Ok(())
+            };
+
+            // When adding and linking new elements in a callback fails, error information is often sparse.
+            // GStreamer's built-in debugging can be hard to link back to the exact position within the code
+            // that failed. Since callbacks are called from random threads within the pipeline, it can get hard
+            // to get good error information. The macros used in the following can solve that. With the use
+            // of those, one can send arbitrary rust types (using the pipeline's bus) into the mainloop.
+            // What we send here is unpacked down below, in the iteration-code over sent bus-messages.
+            // Because we are using the failure crate for error details here, we even get a backtrace for
+            // where the error was constructed. (If RUST_BACKTRACE=1 is set)
+            if let Err(err) = insert_sink() {
+                // The following sends a message of type Error on the bus, containing our detailed
+                // error information.
+                element_error!(
+                    dbin,
+                    gst::LibraryError::Failed,
+                    ("Failed to insert sink"),
+                    details: gst::Structure::builder("error-details")
+                                .field("error",
+                                       &ErrorValue(Arc::new(Mutex::new(Some(err)))))
+                                .build()
+                );
             }
-            Err(_) => {
-                info!("Error making v4l2convert element, falling back to software-based videoconvert element");
-                "videoconvert".into()
-            }
-        }
+        });
+
+        Ok(pipeline)
     }
 
     pub fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
         gst::init()?;
 
-        let decoded_video_src = self.decoded_video_src();
-
-        let h264_video_sinks = self.h264_video_sinks()?;
-
-        let vconverter = self.detect_vconverter();
-
-        let h264_encoder = self.detect_h264_encoder();
-
-        let pipeline_str = format!(
-            "{decoded_video_src} \
-            ! videorate \
-            ! videoscale \
-            ! {vconverter} \
-            ! video/x-raw,framerate={video_framerate}/1,width={video_width},height={video_height} \
-            ! tee name=decoded_video_t \
-            ! queue name=decoded_video_tensor_q leaky=2 \
-            ! videoscale \
-            ! capsfilter caps=video/x-raw,width={tensor_width},height={tensor_height} \
-            ! tensor_converter \
-            ! tensor_transform mode=arithmetic option=typecast:uint8,add:0,div:1 \
-            ! capsfilter caps=other/tensors,num_tensors=1,format=static \
-            ! tensor_filter framework=tensorflow2-lite model={model_file} \
-            ! tensor_rate framerate={tensor_framerate}/1 throttle=true \
-            ! tee name=tensor_t \
-            ! queue name=tensor_decoder_q \
-            ! tensor_decoder mode=bounding_boxes \
-                option1=mobilenet-ssd-postprocess \
-                option2={label_file} \
-                option3=0:1:2:3,{nms_threshold} \
-                option4={video_width}:{video_height} \
-                option5={tensor_width}:{tensor_height} \
-            ! {vconverter} \
-            ! {h264_encoder} \
-            ! udpsink port={overlay_udp_port} \
-            decoded_video_t. ! queue name=h264queue ! {h264_encoder} ! {h264_video_sinks} \
-            tensor_t. ! queue name=custom_tensor_decoder_t ! tensor_decoder mode=custom-code option1=printnanny_bb_dataframe_decoder \
-            ! dataframe_agg filter-threshold=0.5 output-type=json \
-            ! nats_sink nats-address={nats_server_uri} \
-            ",
-            tensor_height = &self.config.tflite_model.tensor_height,
-            tensor_width = &self.config.tflite_model.tensor_width,
-            model_file = &self.config.tflite_model.model_file,
-            label_file = &self.config.tflite_model.label_file,
-            nms_threshold = &self.config.tflite_model.nms_threshold,
-            video_width = &self.config.video_width,
-            video_height = &self.config.video_height,
-            decoded_video_src = decoded_video_src,
-            h264_video_sinks = h264_video_sinks,
-            video_framerate = &self.config.video_framerate,
-            nats_server_uri = &self.config.nats_server_uri,
-            vconverter = vconverter,
-            h264_encoder = h264_encoder,
-            tensor_framerate = &self.config.tflite_model.tensor_framerate,
-            overlay_udp_port = &self.config.overlay_udp_port
-        );
-
-        warn!("Building pipeline: {}", pipeline_str);
-
-        let pipeline = gst::parse_launch(&pipeline_str)?;
-        let pipeline = pipeline.dynamic_cast::<gst::Pipeline>().unwrap();
+        let pipeline = match self.config.video_src_type {
+            VideoSrcType::Uri => self.make_uri_pipeline()?,
+            VideoSrcType::File => self.make_uri_pipeline()?,
+            VideoSrcType::Device => self.make_device_pipeline()?,
+        };
 
         Ok(pipeline)
     }
 }
 
-fn run(pipeline: gst::Pipeline) -> Result<(), Error> {
+fn run(pipeline: gst::Pipeline) -> Result<()> {
     pipeline.set_state(gst::State::Playing)?;
 
     let bus = pipeline
         .bus()
         .expect("Pipeline without bus. Shouldn't happen!");
 
+    // This code iterates over all messages that are sent across our pipeline's bus.
+    // In the callback ("pad-added" on the decodebin), we sent better error information
+    // using a bus message. This is the position where we get those messages and log
+    // the contained information.
     for msg in bus.iter_timed(gst::ClockTime::NONE) {
         use gst::MessageView;
 
@@ -188,25 +612,47 @@ fn run(pipeline: gst::Pipeline) -> Result<(), Error> {
             MessageView::Eos(..) => break,
             MessageView::Error(err) => {
                 pipeline.set_state(gst::State::Null)?;
-                gst::error!(CAT, "demo-video pipeline failed with error: {:?}", err);
+
+                match err.details() {
+                    // This bus-message of type error contained our custom error-details struct
+                    // that we sent in the pad-added callback above. So we unpack it and log
+                    // the detailed error information here. details contains a glib::SendValue.
+                    // The unpacked error is the converted to a Result::Err, stopping the
+                    // application's execution.
+                    Some(details) if details.name() == "error-details" => details
+                        .get::<&ErrorValue>("error")
+                        .unwrap()
+                        .clone()
+                        .0
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .map(Result::Err)
+                        .expect("error-details message without actual error"),
+                    _ => Err(ErrorMessage {
+                        src: msg
+                            .src()
+                            .map(|s| String::from(s.path_string()))
+                            .unwrap_or_else(|| String::from("None")),
+                        error: err.error().to_string(),
+                        debug: err.debug(),
+                        source: err.error(),
+                    }
+                    .into()),
+                }?;
             }
-            MessageView::StateChanged(state_changed) => {
-                gst::info!(
-                    CAT,
-                    "Setting pipeline {:?} state to {:?}",
-                    pipeline,
-                    &state_changed
-                );
-                if state_changed.src().map(|s| s == pipeline).unwrap_or(false) {
-                    pipeline.debug_to_dot_file(
-                        gst::DebugGraphDetails::VERBOSE,
-                        format!(
-                            "{}-{:?}-{:?}",
-                            pipeline.name(),
-                            &state_changed.old(),
-                            &state_changed.current()
-                        ),
+            MessageView::StateChanged(s) => {
+                let filename = format!("{}-{:?}-{:?}", pipeline.name(), &s.old(), &s.current());
+                if s.src().map(|s| s == pipeline).unwrap_or(false) {
+                    info!(
+                        "State changed from {:?}: {:?} -> {:?} ({:?})",
+                        s.src().map(|s| s.path_string()),
+                        s.old(),
+                        s.current(),
+                        s.pending()
                     );
+                    pipeline.debug_to_dot_file(gst::DebugGraphDetails::VERBOSE, &filename);
+                    info!("Wrote {}", &filename);
                 }
             }
             _ => (),
