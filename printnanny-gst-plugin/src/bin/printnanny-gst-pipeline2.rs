@@ -286,7 +286,7 @@ impl PipelineApp {
 
                 let dataframe_agg = gst::ElementFactory::make("dataframe_agg")
                     .name("df_agg")
-                    .property("filter-threshold", 100 as f32 / nms_threshold as f32)
+                    .property("filter-threshold", nms_threshold as f32 / 100 as f32)
                     .property_from_str("output-type", "json")
                     .build()?;
 
