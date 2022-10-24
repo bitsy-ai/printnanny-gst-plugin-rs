@@ -4,7 +4,7 @@ description = "PrintNanny Gstreamer Plugin configuration helpers"
 version = "0.1.3"
 authors = ["Leigh Johnson <leigh@printnanny.ai>"]
 license-file = "LICENSE"
-rust-version = "1.64"
+rust-version = "1.63"
 edition = "2021"
 repository = "https://github.com/bitsy-ai/printnanny-gst-plugin-rs/"
 
