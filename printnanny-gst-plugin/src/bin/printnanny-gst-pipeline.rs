@@ -108,7 +108,7 @@ impl PipelineApp {
             .property("ssrc", video_ssrc)
             .build()?;
 
-        let sink = gst::ElementFactory::make("udpsink")
+        let video_udp_sink = gst::ElementFactory::make("udpsink")
             .name("udpsink__video")
             .property("port", video_udp_port)
             .build()?;
@@ -137,24 +137,103 @@ impl PipelineApp {
             .name("videoscale__input")
             .build()?;
 
-        let h264_udpsink_q2 = gst::ElementFactory::make("queue2")
-            .name("queue2__video_udpsink")
+        // split h264-encoded video stream with a tee for compatibility with OctoPrint's webcam plugin
+        // OctoPrint's WebRTC support is still experimental and is not compatible with Janus Gateway's signaling
+        // Instead, write a ringbuffer of hls frames + playlist to disk (HTTP connection handled by nginx, outside of scope of this pipeline)
+
+        let rtp_queue = gst::ElementFactory::make("queue")
+            .name("queue__rtph264pay")
             .build()?;
 
-        let h264_video_elements = &[
-            &invideoconverter,
-            &invideorate,
-            &invideoscaler,
-            &raw_video_capsfilter,
-            &video_tee,
-            &h264_queue,
-            &encoder,
-            &video_payloader,
-            &h264_udpsink_q2,
-            &sink,
-        ];
-        pipeline.add_many(h264_video_elements)?;
-        gst::Element::link_many(h264_video_elements)?;
+        let insert_h264_sinks = |octoprint_compat: bool| -> Result<()> {
+            match octoprint_compat {
+                true => {
+                    let h264_tee = gst::ElementFactory::make("tee")
+                        .name("tee__h264_video")
+                        .build()?;
+
+                    let hls_queue = gst::ElementFactory::make("queue")
+                        .name("queue__hlssink")
+                        .build()?;
+
+                    let hls_sink = gst::ElementFactory::make("hlssink2")
+                        .property("location", &self.config.hls_segments)
+                        .property("playlist-location", &self.config.hls_playlist)
+                        .property("playlist-root", &self.config.hls_playlist_root)
+                        .build()?;
+                    let h264_video_elements = &[
+                        &invideoconverter,
+                        &invideorate,
+                        &invideoscaler,
+                        &raw_video_capsfilter,
+                        &video_tee,
+                        &h264_queue,
+                        &encoder,
+                        &h264_tee,
+                    ];
+
+                    let hls_elements = &[&hls_queue, &hls_sink];
+                    let rtp_elements = &[&rtp_queue, &video_payloader, &video_udp_sink];
+                    pipeline.add_many(h264_video_elements)?;
+                    pipeline.add_many(hls_elements)?;
+                    pipeline.add_many(rtp_elements)?;
+
+                    gst::Element::link_many(h264_video_elements)?;
+                    gst::Element::link_many(&[&h264_tee, &hls_queue, &hls_sink])?;
+                    gst::Element::link_many(&[
+                        &h264_tee,
+                        &rtp_queue,
+                        &video_payloader,
+                        &video_udp_sink,
+                    ])?;
+
+                    for e in h264_video_elements {
+                        e.sync_state_with_parent()?
+                    }
+
+                    for e in hls_elements {
+                        e.sync_state_with_parent()?
+                    }
+
+                    for e in rtp_elements {
+                        e.sync_state_with_parent()?
+                    }
+
+                    Ok(())
+                }
+                false => {
+                    let h264_video_elements = &[
+                        &invideoconverter,
+                        &invideorate,
+                        &invideoscaler,
+                        &raw_video_capsfilter,
+                        &video_tee,
+                        &h264_queue,
+                        &encoder,
+                        &rtp_queue,
+                        &video_payloader,
+                        &video_udp_sink,
+                    ];
+                    pipeline.add_many(h264_video_elements)?;
+                    gst::Element::link_many(h264_video_elements)?;
+
+                    for e in h264_video_elements {
+                        e.sync_state_with_parent()?
+                    }
+
+                    Ok(())
+                }
+            }
+        };
+
+        match self.config.hls_http_enabled {
+            Some(true) => insert_h264_sinks(true)?,
+            Some(false) => insert_h264_sinks(false)?,
+            None => match self.config.detect_hls_http_enabled()? {
+                true => insert_h264_sinks(true)?,
+                false => insert_h264_sinks(false)?,
+            },
+        };
 
         let tensor_q = gst::ElementFactory::make("queue")
             .name("queue__leaky")
@@ -209,7 +288,6 @@ impl PipelineApp {
         let tensor_pipeline_elements = &[
             &tensor_q,
             &tensor_vconverter,
-            // &tensor_videorate,
             &tensor_videoscale,
             &raw_rgb_capsfilter,
             &tensor_converter,
@@ -327,9 +405,6 @@ impl PipelineApp {
         gst::Element::link_many(&[&tflite_output_tee, &df_decoder_q])?;
         gst::Element::link_many(df_elements)?;
 
-        for e in h264_video_elements {
-            e.sync_state_with_parent()?
-        }
         for e in tensor_pipeline_elements {
             e.sync_state_with_parent()?
         }
