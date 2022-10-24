@@ -88,6 +88,10 @@ impl PipelineApp {
         let tensor_height = self.config.tflite_model.tensor_height.clone();
         let tensor_width = self.config.tflite_model.tensor_width.clone();
         let video_framerate = self.config.video_framerate.clone();
+        let tflite_label_file = self.config.tflite_model.label_file.clone();
+        let nms_threshold = self.config.tflite_model.nms_threshold.clone();
+        let overlay_udp_port = self.config.overlay_udp_port.clone();
+        let nats_server_uri = self.config.nats_server_uri.clone();
 
         uriencodebin.connect_pad_added(move |dbin, src_pad| {
             warn!("src_pad added {:?}", src_pad);
@@ -106,14 +110,7 @@ impl PipelineApp {
             let insert_sink = || -> Result<(), Error> {
                 // decodebin found a raw videostream, so we build the follow-up pipeline to encode h264 video, rtp payload, and sink to janus gateway rtp ports
 
-                let inqueue = gst::ElementFactory::make("queue")
-                    .name("uridecodebin_q")
-                    .build()?;
-
                 let h264_queue = gst::ElementFactory::make("queue").name("h264_q").build()?;
-                let converter = gst::ElementFactory::make("videoconvert").build()?;
-                let scaler = gst::ElementFactory::make("videoscale").build()?;
-                let videorate = gst::ElementFactory::make("videorate").build()?;
 
                 let video_tee = gst::ElementFactory::make("tee")
                     .name("inputvideo_tee")
@@ -139,6 +136,7 @@ impl PipelineApp {
                     .build()?;
 
                 let sink = gst::ElementFactory::make("udpsink")
+                    .name("video_udpsink")
                     .property("port", video_udp_port)
                     .build()?;
 
@@ -155,11 +153,6 @@ impl PipelineApp {
                 );
 
                 let h264_video_elements = &[
-                    // &raw_rgb_capsfilter,
-                    // &inqueue,
-                    // &videorate,
-                    // &converter,
-                    // &scaler,
                     &video_tee,
                     &h264_queue,
                     &encoder,
@@ -186,7 +179,6 @@ impl PipelineApp {
                 let tensor_videoscale = gst::ElementFactory::make("videoscale").build()?;
 
                 let tensor_converter = gst::ElementFactory::make("tensor_converter").build()?;
-                let tensor_sink = gst::ElementFactory::make("tensor_sink").build()?;
                 let tensor_capsfilter = gst::ElementFactory::make("capsfilter")
                     .name("tensor_capsfilter")
                     .build()?;
@@ -222,7 +214,9 @@ impl PipelineApp {
                         .build(),
                 );
 
-                // let tensor_rate = gst::ElementFactory::make("tensor_rate")
+                let tflite_output_tee = gst::ElementFactory::make("tee")
+                    .name("tflite_output_tee")
+                    .build()?;
 
                 let tensor_pipeline_elements = &[
                     &tensor_q,
@@ -232,19 +226,100 @@ impl PipelineApp {
                     &raw_rgb_capsfilter,
                     &tensor_converter,
                     &tensor_transform,
-                    // &tensor_capsfilter,
+                    &tensor_capsfilter,
                     &tensor_filter,
-                    &tensor_sink,
+                    &tflite_output_tee,
                 ];
-
                 pipeline.add_many(tensor_pipeline_elements)?;
                 gst::Element::link_many(&[&video_tee, &tensor_q])?;
                 gst::Element::link_many(tensor_pipeline_elements)?;
+
+                let box_decoder_q = gst::ElementFactory::make("queue")
+                    .name("box_decoder_q")
+                    .build()?;
+                let box_decoder = gst::ElementFactory::make("tensor_decoder")
+                    .name("box_decoder")
+                    .property_from_str("mode", "bounding_boxes")
+                    .property_from_str("option1", "mobilenet-ssd-postprocess")
+                    .property_from_str("option2", &tflite_label_file)
+                    .property_from_str("option3", &format!("0:1:2:3,{}", nms_threshold))
+                    .property_from_str("option4", &format!("{video_width}:{video_height}"))
+                    .property_from_str("option5", &format!("{tensor_width}:{tensor_height}"))
+                    .build()?;
+                let box_videoconverter = gst::ElementFactory::make("videoconvert")
+                    .name("box_videoconvert")
+                    .build()?;
+
+                let box_h264encoder = match gst::ElementFactory::make("v4l2h264enc")
+                    .property_from_str("extra-controls", "controls,repeat_sequence_header=1")
+                    .build()
+                {
+                    Ok(el) => el,
+                    Err(_) => {
+                        warn!("v4l2h264enc not found, falling back to openh264enc");
+                        gst::ElementFactory::make("openh264enc").build()?
+                    }
+                };
+
+                let box_udpsink = gst::ElementFactory::make("udpsink")
+                    .name("boxoverlay_udpsink")
+                    .property("port", overlay_udp_port)
+                    .build()?;
+
+                let df_decoder_q = gst::ElementFactory::make("queue")
+                    .name("df_decoder_q")
+                    .build()?;
+
+                let box_overlay_elements = &[
+                    &box_decoder_q,
+                    &box_decoder,
+                    &box_videoconverter,
+                    &box_h264encoder,
+                    &box_udpsink,
+                ];
+
+                let dataframe_decoder = gst::ElementFactory::make("tensor_decoder")
+                    .name("df_tensor_decoder")
+                    .property("mode", "custom-code")
+                    .property("option1", "printnanny_bb_dataframe_decoder")
+                    .build()?;
+
+                let dataframe_agg = gst::ElementFactory::make("dataframe_agg")
+                    .name("df_agg")
+                    .property("filter-threshold", 100 as f32 / nms_threshold as f32)
+                    .property_from_str("output-type", "json")
+                    .build()?;
+
+                let nats_sink = gst::ElementFactory::make("nats_sink")
+                    .property("nats-address", &nats_server_uri)
+                    .build()?;
+
+                let df_elements = &[
+                    &df_decoder_q,
+                    &dataframe_decoder,
+                    &dataframe_agg,
+                    &nats_sink,
+                ];
+
+                pipeline.add_many(box_overlay_elements)?;
+                pipeline.add_many(df_elements)?;
+                gst::Element::link_many(&[&tflite_output_tee, &box_decoder_q])?;
+                gst::Element::link_many(box_overlay_elements)?;
+                gst::Element::link_many(&[&tflite_output_tee, &df_decoder_q])?;
+                gst::Element::link_many(df_elements)?;
 
                 for e in h264_video_elements {
                     e.sync_state_with_parent()?
                 }
                 for e in tensor_pipeline_elements {
+                    e.sync_state_with_parent()?
+                }
+
+                for e in box_overlay_elements {
+                    e.sync_state_with_parent()?
+                }
+
+                for e in df_elements {
                     e.sync_state_with_parent()?
                 }
 
