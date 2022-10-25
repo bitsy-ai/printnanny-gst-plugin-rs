@@ -168,6 +168,10 @@ impl PipelineApp {
         let insert_h264_sinks = |octoprint_compat: bool| -> Result<()> {
             match octoprint_compat {
                 true => {
+                    warn!(
+                        "octoprint compatibility enabled, writing hls segments/playlist to {} {}",
+                        &self.config.hls_segments, &self.config.hls_playlist
+                    );
                     let h264_tee = gst::ElementFactory::make("tee")
                         .name("tee__h264_video")
                         .build()?;
