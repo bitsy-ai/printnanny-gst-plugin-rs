@@ -99,6 +99,17 @@ impl PipelineApp {
             }
         };
 
+        let video_h264_capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("capsfilter__video_h264_level")
+            .build()?;
+        video_h264_capsfilter.set_property(
+            "caps",
+            gst::Caps::builder("video/x-h264")
+                .field("level", "3")
+                .field("profile", "main")
+                .build(),
+        );
+
         let video_ssrc: u32 = rand::thread_rng().gen_range(0..=2147483647);
         let video_payloader = gst::ElementFactory::make("rtph264pay")
             .name("rtph264pay__video")
@@ -169,6 +180,7 @@ impl PipelineApp {
                         &video_tee,
                         &h264_queue,
                         &encoder,
+                        &video_h264_capsfilter,
                         &h264_tee,
                     ];
 
@@ -210,6 +222,7 @@ impl PipelineApp {
                         &video_tee,
                         &h264_queue,
                         &encoder,
+                        &video_h264_capsfilter,
                         &rtp_queue,
                         &video_payloader,
                         &video_udp_sink,
@@ -341,6 +354,17 @@ impl PipelineApp {
             }
         };
 
+        let box_h264_capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("capsfilter__box_h264_level")
+            .build()?;
+        box_h264_capsfilter.set_property(
+            "caps",
+            gst::Caps::builder("video/x-h264")
+                .field("level", "3")
+                .field("profile", "main")
+                .build(),
+        );
+
         let boxes_ssrc: u32 = rand::thread_rng().gen_range(0..=2147483647);
         let boxes_payloader = gst::ElementFactory::make("rtph264pay")
             .name("rtph264pay__boxes")
@@ -370,6 +394,7 @@ impl PipelineApp {
             &box_videorate,
             &raw_box_capsfilter,
             &box_h264encoder,
+            &box_h264_capsfilter,
             &boxes_payloader,
             &box_udpsink_q2,
             &box_udpsink,
