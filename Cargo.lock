@@ -2765,7 +2765,6 @@ version = "0.1.6"
 dependencies = [
  "clap",
  "figment",
- "file-lock",
  "log",
  "printnanny-services",
  "serde 1.0.147",

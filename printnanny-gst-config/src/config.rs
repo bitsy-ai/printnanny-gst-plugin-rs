@@ -1,8 +1,8 @@
+use std::fs;
 use std::io::prelude::*;
 use std::path::PathBuf;
 
 use clap::ArgMatches;
-use file_lock::{FileLock, FileOptions};
 use log::{debug, info};
 
 use serde::{Deserialize, Serialize};
@@ -285,12 +285,8 @@ impl PrintNannyGstPipelineConfig {
         let filename = Self::config_file();
         // lock file for writing
         let content = toml::ser::to_string_pretty(self)?;
-        let lock_for_writing = FileOptions::new().write(true).create(true).truncate(true);
-        info!("Attempting to lock {} for writing", &filename);
-        let mut filelock = FileLock::lock(&filename, true, lock_for_writing)?;
-        filelock.file.write_all(content.as_bytes())?;
-        // Manually unlocking is optional as we unlock on Drop
-        filelock.unlock()?;
+        info!("Attempting to write config: {}", &filename);
+        fs::write(&filename, content)?;
         info!("Wrote {:?}", filename);
         Ok(())
     }
