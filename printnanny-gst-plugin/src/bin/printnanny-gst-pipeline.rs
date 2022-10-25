@@ -299,12 +299,19 @@ impl PipelineApp {
                 .format(gst_video::VideoFormat::Rgb)
                 .width(tensor_width)
                 .height(tensor_height)
-                // .framerate(tensor_framerate.into())
                 .build(),
         );
 
         let tflite_output_tee = gst::ElementFactory::make("tee")
             .name("tflite_output_tee")
+            .build()?;
+
+        let tensor_rate = gst::ElementFactory::make("tensor_rate")
+            .property("throttle", true)
+            .property_from_str(
+                "framerate",
+                &format!("{}/1", &self.config.tflite_model.tensor_framerate),
+            )
             .build()?;
 
         let tensor_pipeline_elements = &[
@@ -316,6 +323,7 @@ impl PipelineApp {
             &tensor_transform,
             &tensor_capsfilter,
             &tensor_filter,
+            &tensor_rate,
             &tflite_output_tee,
         ];
         pipeline.add_many(tensor_pipeline_elements)?;
