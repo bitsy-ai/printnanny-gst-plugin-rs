@@ -2761,7 +2761,7 @@ dependencies = [
 
 [[package]]
 name = "printnanny-gst-config"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "clap",
  "figment",
@@ -2776,7 +2776,7 @@ dependencies = [
 
 [[package]]
 name = "printnanny-gst-plugin"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "arrow",
