@@ -16,7 +16,7 @@ use printnanny_services::systemd::systemctl_unit_is_enabled;
 use crate::error::PrintNannyGstConfigError;
 
 pub const DEFAULT_CONFIG_FILENAME: &str = "printnanny-gst.toml";
-pub const DEFAULT_CONFIG_PATH: &str = "/etc/printnanny/printnanny-gst.toml";
+pub const DEFAULT_CONFIG_PATH: &str = "/var/run/printnanny/printnanny-gst.toml";
 pub const CONFIG_ENV_VAR: &str = "PRINTNANNY_GST_CONFIG";
 
 #[derive(Debug, Clone, clap::ValueEnum, Deserialize, Serialize, PartialEq, Eq)]
