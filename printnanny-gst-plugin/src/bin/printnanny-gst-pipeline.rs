@@ -136,11 +136,16 @@ impl PipelineApp {
                 .build(),
         );
 
-        let invideoconverter = match gst::ElementFactory::make("v4l2convert").build() {
+        let invideoconverter = match gst::ElementFactory::make("v4l2convert")
+            .name("videoconvert__input")
+            .build()
+        {
             Ok(el) => el,
             Err(_) => {
                 warn!("v4l2convert not found, falling back to videoconvert");
-                gst::ElementFactory::make("videoconvert").build()?
+                gst::ElementFactory::make("videoconvert")
+                    .name("videoconvert__input")
+                    .build()?
             }
         };
 
