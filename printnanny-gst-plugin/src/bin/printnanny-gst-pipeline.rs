@@ -22,7 +22,7 @@ use thiserror::Error;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use printnanny_gst_config::config::{PrintNannyGstPipelineSettings, VideoSrcType};
+use printnanny_gst_config::settings::{PrintNannyGstPipelineSettings, VideoSrcType};
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
