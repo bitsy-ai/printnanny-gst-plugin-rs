@@ -13,7 +13,7 @@ use printnanny_services::figment::value::{Dict, Map};
 use printnanny_services::figment::{Figment, Metadata, Profile, Provider};
 use printnanny_services::systemd::systemctl_unit_is_enabled;
 
-use crate::error::PrintNannyGstConfigError;
+use crate::error::PrintNannyGstSettingsError;
 
 pub const DEFAULT_CONFIG_FILENAME: &str = "printnanny-gst.toml";
 pub const DEFAULT_CONFIG_PATH: &str = "/var/run/printnanny/printnanny-gst.toml";
@@ -27,7 +27,7 @@ pub enum VideoSrcType {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-pub struct TfliteModelConfig {
+pub struct TfliteModelSettings {
     pub label_file: String,
     pub model_file: String,
     pub nms_threshold: i32,
@@ -38,7 +38,7 @@ pub struct TfliteModelConfig {
     pub tensor_framerate: i32,
 }
 
-impl Default for TfliteModelConfig {
+impl Default for TfliteModelSettings {
     fn default() -> Self {
         Self {
             label_file: "/usr/share/printnanny/model/labels.txt".into(),
@@ -53,7 +53,7 @@ impl Default for TfliteModelConfig {
     }
 }
 
-impl From<&ArgMatches> for TfliteModelConfig {
+impl From<&ArgMatches> for TfliteModelSettings {
     fn from(args: &ArgMatches) -> Self {
         let label_file = args
             .value_of("label_file")
@@ -101,7 +101,7 @@ impl From<&ArgMatches> for TfliteModelConfig {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-pub struct PrintNannyGstPipelineConfig {
+pub struct PrintNannyGstPipelineSettings {
     pub video_src: String,
     pub preview: bool,
     pub nats_server_uri: String,
@@ -124,20 +124,20 @@ pub struct PrintNannyGstPipelineConfig {
     pub hls_http_enabled: Option<bool>,
     // complex types last, otherwise serde will raise TomlSerError(ValueAfterTable)
     pub video_src_type: VideoSrcType,
-    pub tflite_model: TfliteModelConfig,
+    pub tflite_model: TfliteModelSettings,
 }
 
-impl PrintNannyGstPipelineConfig {
+impl PrintNannyGstPipelineSettings {
     pub fn detect_hls_http_enabled(&self) -> Result<bool, CommandError> {
         systemctl_unit_is_enabled("octoprint.service")
     }
 }
 
-impl Default for PrintNannyGstPipelineConfig {
+impl Default for PrintNannyGstPipelineSettings {
     fn default() -> Self {
         let video_src = "/dev/video0".into();
         let preview = false;
-        let tflite_model = TfliteModelConfig::default();
+        let tflite_model = TfliteModelSettings::default();
         let video_udp_port = 20001;
         let overlay_udp_port = 20002;
 
@@ -171,9 +171,9 @@ impl Default for PrintNannyGstPipelineConfig {
     }
 }
 
-impl From<&ArgMatches> for PrintNannyGstPipelineConfig {
+impl From<&ArgMatches> for PrintNannyGstPipelineSettings {
     fn from(args: &ArgMatches) -> Self {
-        let tflite_model = TfliteModelConfig::from(args);
+        let tflite_model = TfliteModelSettings::from(args);
 
         let video_src_type: &VideoSrcType = args
             .get_one::<VideoSrcType>("video_src_type")
@@ -249,11 +249,11 @@ impl From<&ArgMatches> for PrintNannyGstPipelineConfig {
     }
 }
 
-impl PrintNannyGstPipelineConfig {
+impl PrintNannyGstPipelineSettings {
     // See example: https://docs.rs/figment/latest/figment/index.html#extracting-and-profiles
     // Note the `nested` option on both `file` providers. This makes each
     // top-level dictionary act as a profile
-    pub fn new() -> Result<Self, PrintNannyGstConfigError> {
+    pub fn new() -> Result<Self, PrintNannyGstSettingsError> {
         let figment = Self::figment()?;
         let result = figment.extract()?;
         debug!("Initialized config {:?}", result);
@@ -264,12 +264,12 @@ impl PrintNannyGstPipelineConfig {
         Env::var_or(CONFIG_ENV_VAR, DEFAULT_CONFIG_PATH)
     }
 
-    pub fn from_toml(f: PathBuf) -> Result<Self, PrintNannyGstConfigError> {
-        let figment = PrintNannyGstPipelineConfig::figment()?.merge(Toml::file(f));
+    pub fn from_toml(f: PathBuf) -> Result<Self, PrintNannyGstSettingsError> {
+        let figment = PrintNannyGstPipelineSettings::figment()?.merge(Toml::file(f));
         Ok(figment.extract()?)
     }
 
-    pub fn figment() -> Result<Figment, PrintNannyGstConfigError> {
+    pub fn figment() -> Result<Figment, PrintNannyGstSettingsError> {
         // merge file in PRINTNANNY_CONFIG env var (if set)
         let result = Figment::from(Self { ..Self::default() })
             .merge(Toml::file(Self::config_file()))
@@ -277,11 +277,11 @@ impl PrintNannyGstPipelineConfig {
             // PRINTNANNY_GST_KEY__SUBKEY
             .merge(Env::prefixed("PRINTNANNY_GST_").split("__"));
 
-        info!("Finalized PrintNannyGstConfig: \n {:?}", result);
+        info!("Finalized PrintNannyGstSettings: \n {:?}", result);
         Ok(result)
     }
 
-    pub fn try_save(&self) -> Result<(), PrintNannyGstConfigError> {
+    pub fn try_save(&self) -> Result<(), PrintNannyGstSettingsError> {
         let filename = Self::config_file();
         // lock file for writing
         let content = toml::ser::to_string_pretty(self)?;
@@ -292,9 +292,9 @@ impl PrintNannyGstPipelineConfig {
     }
 }
 
-impl Provider for PrintNannyGstPipelineConfig {
+impl Provider for PrintNannyGstPipelineSettings {
     fn metadata(&self) -> Metadata {
-        Metadata::named("PrintNannyConfig")
+        Metadata::named("PrintNannySettings")
     }
 
     fn data(&self) -> printnanny_services::figment::error::Result<Map<Profile, Dict>> {
@@ -327,7 +327,8 @@ mod tests {
             jail.set_env("PRINTNANNY_GST_CONFIG", config_file.display());
             jail.set_env("PRINTNANNY_GST_TFLITE_MODEL__TENSOR_HEIGHT", expected);
 
-            let config: PrintNannyGstPipelineConfig = PrintNannyGstPipelineConfig::new().unwrap();
+            let config: PrintNannyGstPipelineSettings =
+                PrintNannyGstPipelineSettings::new().unwrap();
             assert_eq!(config.tflite_model.tensor_width, expected);
             assert_eq!(config.tflite_model.tensor_height, expected);
 
@@ -354,11 +355,12 @@ mod tests {
             let expected = 720;
             jail.set_env("PRINTNANNY_GST_CONFIG", config_file.display());
 
-            let mut config: PrintNannyGstPipelineConfig =
-                PrintNannyGstPipelineConfig::new().unwrap();
+            let mut config: PrintNannyGstPipelineSettings =
+                PrintNannyGstPipelineSettings::new().unwrap();
             config.tflite_model.tensor_height = expected;
             config.try_save().unwrap();
-            let config: PrintNannyGstPipelineConfig = PrintNannyGstPipelineConfig::new().unwrap();
+            let config: PrintNannyGstPipelineSettings =
+                PrintNannyGstPipelineSettings::new().unwrap();
             assert_eq!(config.tflite_model.tensor_width, expected);
             assert_eq!(config.tflite_model.tensor_height, expected);
 

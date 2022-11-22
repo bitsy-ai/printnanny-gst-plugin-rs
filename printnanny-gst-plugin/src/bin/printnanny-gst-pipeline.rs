@@ -22,7 +22,7 @@ use thiserror::Error;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use printnanny_gst_config::config::{PrintNannyGstPipelineConfig, VideoSrcType};
+use printnanny_gst_config::config::{PrintNannyGstPipelineSettings, VideoSrcType};
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -57,7 +57,7 @@ struct ErrorValue(Arc<Mutex<Option<Error>>>);
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PipelineApp {
-    config: PrintNannyGstPipelineConfig,
+    config: PrintNannyGstPipelineSettings,
 }
 
 impl PipelineApp {
@@ -631,7 +631,7 @@ fn run(pipeline: gst::Pipeline) -> Result<()> {
 
 impl From<&ArgMatches> for PipelineApp {
     fn from(args: &ArgMatches) -> Self {
-        let config = PrintNannyGstPipelineConfig::from(args);
+        let config = PrintNannyGstPipelineSettings::from(args);
         Self { config }
     }
 }
@@ -678,7 +678,7 @@ fn main() {
                     "video_width",
                     "nats_server_uri"
                 ])
-                .help("Read command-line args from config file. Config must be a valid PrintNannyConfig figment"),
+                .help("Read command-line args from config file. Settings must be a valid PrintNannySettings figment"),
         )
         .arg(
             Arg::new("preview")
@@ -841,7 +841,7 @@ fn main() {
 
     let app = match args.value_of("config") {
         Some(config_file) => {
-            let config = PrintNannyGstPipelineConfig::from_toml(PathBuf::from(config_file))
+            let config = PrintNannyGstPipelineSettings::from_toml(PathBuf::from(config_file))
                 .expect("Failed to extract config");
             info!("Pipeline config: {:?}", config);
             PipelineApp { config }
