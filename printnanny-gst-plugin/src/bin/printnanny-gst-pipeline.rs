@@ -22,7 +22,7 @@ use thiserror::Error;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use printnanny_gst_config::config::{PrintNannyGstPipelineConfig, VideoSrcType};
+use printnanny_gst_config::settings::{PrintNannyGstPipelineSettings, VideoSrcType};
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -57,7 +57,7 @@ struct ErrorValue(Arc<Mutex<Option<Error>>>);
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PipelineApp {
-    config: PrintNannyGstPipelineConfig,
+    settings: PrintNannyGstPipelineSettings,
 }
 
 impl PipelineApp {
@@ -68,18 +68,18 @@ impl PipelineApp {
             .expect("Time went backwards, we've got bigger problems");
         let pipeline_name = format!("pipeline-{:?}", &ts);
 
-        let video_udp_port = self.config.video_udp_port.clone();
+        let video_udp_port = self.settings.video_udp_port.clone();
 
-        let video_width = self.config.video_width.clone();
-        let video_height = self.config.video_height.clone();
-        let tflite_model_file = self.config.tflite_model.model_file.clone();
-        let tensor_height = self.config.tflite_model.tensor_height.clone();
-        let tensor_width = self.config.tflite_model.tensor_width.clone();
-        let video_framerate = self.config.video_framerate.clone();
-        let tflite_label_file = self.config.tflite_model.label_file.clone();
-        let nms_threshold = self.config.tflite_model.nms_threshold.clone();
-        let overlay_udp_port = self.config.overlay_udp_port.clone();
-        let nats_server_uri = self.config.nats_server_uri.clone();
+        let video_width = self.settings.video_width.clone();
+        let video_height = self.settings.video_height.clone();
+        let tflite_model_file = self.settings.tflite_model.model_file.clone();
+        let tensor_height = self.settings.tflite_model.tensor_height.clone();
+        let tensor_width = self.settings.tflite_model.tensor_width.clone();
+        let video_framerate = self.settings.video_framerate.clone();
+        let tflite_label_file = self.settings.tflite_model.label_file.clone();
+        let nms_threshold = self.settings.tflite_model.nms_threshold.clone();
+        let overlay_udp_port = self.settings.overlay_udp_port.clone();
+        let nats_server_uri = self.settings.nats_server_uri.clone();
 
         let pipeline = gst::Pipeline::new(Some(&pipeline_name));
         let h264_queue = gst::ElementFactory::make("queue").name("h264_q").build()?;
@@ -170,7 +170,7 @@ impl PipelineApp {
                 true => {
                     warn!(
                         "octoprint compatibility enabled, writing hls segments/playlist to {} {}",
-                        &self.config.hls_segments, &self.config.hls_playlist
+                        &self.settings.hls_segments, &self.settings.hls_playlist
                     );
                     let h264_tee = gst::ElementFactory::make("tee")
                         .name("tee__h264_video")
@@ -181,9 +181,9 @@ impl PipelineApp {
                         .build()?;
 
                     let hls_sink = gst::ElementFactory::make("hlssink2")
-                        .property("location", &self.config.hls_segments)
-                        .property("playlist-location", &self.config.hls_playlist)
-                        .property("playlist-root", &self.config.hls_playlist_root)
+                        .property("location", &self.settings.hls_segments)
+                        .property("playlist-location", &self.settings.hls_playlist)
+                        .property("playlist-root", &self.settings.hls_playlist_root)
                         .build()?;
                     let h264_video_elements = &[
                         &invideoconverter,
@@ -252,10 +252,10 @@ impl PipelineApp {
             }
         };
 
-        match self.config.hls_http_enabled {
+        match self.settings.hls_http_enabled {
             Some(true) => insert_h264_sinks(true)?,
             Some(false) => insert_h264_sinks(false)?,
-            None => match self.config.detect_hls_http_enabled()? {
+            None => match self.settings.detect_hls_http_enabled()? {
                 true => insert_h264_sinks(true)?,
                 false => insert_h264_sinks(false)?,
             },
@@ -314,7 +314,7 @@ impl PipelineApp {
             .property("throttle", true)
             .property_from_str(
                 "framerate",
-                &format!("{}/1", &self.config.tflite_model.tensor_framerate),
+                &format!("{}/1", &self.settings.tflite_model.tensor_framerate),
             )
             .build()?;
 
@@ -486,7 +486,7 @@ impl PipelineApp {
         let uriencodebin = gst::ElementFactory::make("uridecodebin3")
             .property_from_str("caps", "video/x-raw")
             .property("use-buffering", true)
-            .property("uri", &self.config.video_src)
+            .property("uri", &self.settings.video_src)
             .build()?;
 
         pipeline.add_many(&[&uriencodebin])?;
@@ -549,7 +549,7 @@ impl PipelineApp {
     pub fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
         gst::init()?;
 
-        let pipeline = match self.config.video_src_type {
+        let pipeline = match self.settings.video_src_type {
             VideoSrcType::Uri => self.make_uri_pipeline()?,
             VideoSrcType::File => self.make_uri_pipeline()?,
             VideoSrcType::Device => self.make_device_pipeline()?,
@@ -631,8 +631,8 @@ fn run(pipeline: gst::Pipeline) -> Result<()> {
 
 impl From<&ArgMatches> for PipelineApp {
     fn from(args: &ArgMatches) -> Self {
-        let config = PrintNannyGstPipelineConfig::from(args);
-        Self { config }
+        let settings = PrintNannyGstPipelineSettings::from(args);
+        Self { settings }
     }
 }
 
@@ -655,7 +655,8 @@ fn main() {
                 .help("Sets the level of verbosity. Info: -v Debug: -vv Trace: -vvv"),
         )
         .arg(
-            Arg::new("config")
+            Arg::new("settings")
+                .long("--settings")
                 .long("--config")
                 .short('c')
                 .takes_value(true)
@@ -678,7 +679,7 @@ fn main() {
                     "video_width",
                     "nats_server_uri"
                 ])
-                .help("Read command-line args from config file. Config must be a valid PrintNannyConfig figment"),
+                .help("Read command-line args from config file. Settings must be a valid PrintNannySettings figment"),
         )
         .arg(
             Arg::new("preview")
@@ -839,12 +840,12 @@ fn main() {
         }
     };
 
-    let app = match args.value_of("config") {
-        Some(config_file) => {
-            let config = PrintNannyGstPipelineConfig::from_toml(PathBuf::from(config_file))
-                .expect("Failed to extract config");
-            info!("Pipeline config: {:?}", config);
-            PipelineApp { config }
+    let app = match args.value_of("settings") {
+        Some(settings_file) => {
+            let settings = PrintNannyGstPipelineSettings::from_toml(PathBuf::from(settings_file))
+                .expect("Failed to extract settings");
+            info!("Pipeline settings: {:?}", settings);
+            PipelineApp { settings }
         }
         None => PipelineApp::from(&args),
     };

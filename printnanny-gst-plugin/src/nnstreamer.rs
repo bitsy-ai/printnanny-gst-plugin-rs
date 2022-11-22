@@ -80,7 +80,7 @@ pub struct GstTensorsInfo {
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct GstTensorsConfig {
+pub struct GstTensorsSettings {
     pub info: GstTensorsInfo,
     pub format: TensorFormat, // tensor stream type
     pub rate_n: c_int,        //framerate is in fraction, which is numerator/denominator
@@ -90,7 +90,7 @@ pub struct GstTensorsConfig {
 // based on: https://github.com/nnstreamer/nnstreamer/blob/f2c3bcd87f34ac2ad52ca0a17f6515c54e6f2d66/tests/nnstreamer_decoder/unittest_decoder.cc#L28
 pub extern "C" fn printnanny_bb_dataframe_decoder(
     input: *const GstTensorMemory,
-    config: *const GstTensorsConfig,
+    config: *const GstTensorsSettings,
     _data: libc::c_void,
     out_buf: *mut gst_sys::GstBuffer,
 ) -> i32 {
@@ -109,7 +109,7 @@ pub extern "C" fn printnanny_bb_dataframe_decoder(
         if df_config.is_none() {
             gst::error!(
                 CAT,
-                "printnanny_bb_dataframe_decoder received NULL GstTensorsConfig"
+                "printnanny_bb_dataframe_decoder received NULL GstTensorsSettings"
             );
             return GST_FLOW_ERROR;
         }
@@ -246,7 +246,7 @@ extern "C" {
         name: *const c_char,
         tensor_decoder_custom: extern "C" fn(
             input: *const GstTensorMemory,
-            config: *const GstTensorsConfig,
+            config: *const GstTensorsSettings,
             data: libc::c_void,
             out_buf: *mut gst_sys::GstBuffer,
         ) -> i32,
