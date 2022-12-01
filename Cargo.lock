@@ -2760,7 +2760,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "printnanny-gst-config"
+name = "printnanny-cam-settings"
 version = "0.2.0"
 dependencies = [
  "clap",
@@ -2798,7 +2798,7 @@ dependencies = [
  "ndarray",
  "once_cell",
  "polars",
- "printnanny-gst-config",
+ "printnanny-cam-settings",
  "rand 0.8.5",
  "serde 1.0.147",
  "serde_json",
