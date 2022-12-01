@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum PrintNannyGstSettingsError {
+pub enum PrintNannyCamSettingsError {
     #[error(transparent)]
     FigmentError(#[from] printnanny_services::figment::error::Error),
     #[error(transparent)]

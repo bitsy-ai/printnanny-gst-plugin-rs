@@ -22,7 +22,7 @@ use thiserror::Error;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use printnanny_gst_config::settings::{PrintNannyGstPipelineSettings, VideoSrcType};
+use printnanny_gst_config::settings::{PrintNannyCamSettings, VideoSrcType};
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -57,7 +57,7 @@ struct ErrorValue(Arc<Mutex<Option<Error>>>);
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PipelineApp {
-    settings: PrintNannyGstPipelineSettings,
+    settings: PrintNannyCamSettings,
 }
 
 impl PipelineApp {
@@ -631,7 +631,7 @@ fn run(pipeline: gst::Pipeline) -> Result<()> {
 
 impl From<&ArgMatches> for PipelineApp {
     fn from(args: &ArgMatches) -> Self {
-        let settings = PrintNannyGstPipelineSettings::from(args);
+        let settings = PrintNannyCamSettings::from(args);
         Self { settings }
     }
 }
@@ -842,7 +842,7 @@ fn main() {
 
     let app = match args.value_of("settings") {
         Some(settings_file) => {
-            let settings = PrintNannyGstPipelineSettings::from_toml(PathBuf::from(settings_file))
+            let settings = PrintNannyCamSettings::from_toml(PathBuf::from(settings_file))
                 .expect("Failed to extract settings");
             info!("Pipeline settings: {:?}", settings);
             PipelineApp { settings }
