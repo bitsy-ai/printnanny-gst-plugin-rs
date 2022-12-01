@@ -5,7 +5,7 @@ use std::ffi::CString;
 use std::panic::catch_unwind;
 use std::slice; // or NativeEndian
 
-use log::info;
+use log::trace;
 
 use gst_sys::{GST_FLOW_ERROR, GST_FLOW_OK};
 use once_cell::sync::Lazy;
@@ -211,11 +211,11 @@ pub extern "C" fn printnanny_bb_dataframe_decoder(
         match need_alloc {
             true => {
                 let outmem = gst::Memory::with_size(arrow_msg.len());
-                info!("need_alloc true, allocating memory");
+                trace!("need_alloc true, allocating memory");
                 gstbufref.append_memory(outmem);
             }
             false => {
-                info!("need_alloc false, setting buffer size");
+                trace!("need_alloc false, setting buffer size");
                 if gstbufref.size() < arrow_msg.len() {
                     gstbufref.set_size(arrow_msg.len());
                 }
