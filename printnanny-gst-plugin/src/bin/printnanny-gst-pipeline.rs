@@ -468,11 +468,12 @@ impl PipelineApp {
     }
 
     async fn make_csi_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let device_monitor = gst::DeviceMonitor::new();
+        device_monitor.set_show_all_devices(true);
+
         let pipeline = self.make_common_pipeline().await?;
-        let videosrc = gst::ElementFactory::make("v4l2src")
+        let videosrc = gst::ElementFactory::make("libcamerasrc")
             .property_from_str("name", "camera0")
-            .property_from_str("device", &self.settings.video_src)
-            .property_from_str("do-timestamp", "true")
             .build()?;
 
         let capsfilter = gst::ElementFactory::make("capsfilter")
