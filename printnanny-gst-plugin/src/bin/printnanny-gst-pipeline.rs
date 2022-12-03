@@ -496,9 +496,6 @@ impl PipelineApp {
             .by_name("tee__inputvideo")
             .expect("Element with name tee__inputvideo not found");
 
-        // let connect_element = pipeline
-        //     .by_name("videoconvert__input")
-        //     .expect("Element with name videoconvert__input not found");
         gst::Element::link_many(&[&capsfilter, &connect_element])?;
 
         Ok(pipeline)
