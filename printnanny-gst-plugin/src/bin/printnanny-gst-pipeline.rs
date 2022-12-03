@@ -474,12 +474,26 @@ impl PipelineApp {
             .property_from_str("do-timestamp", "true")
             .build()?;
 
-        pipeline.add_many(&[&videosrc])?;
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("capsfilter__camera")
+            .build()?;
+
+        capsfilter.set_property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("width", self.settings.video_width)
+                .field("height", self.settings.video_height)
+                .field("format", "YUYV")
+                .build(),
+        );
+
+        pipeline.add_many(&[&videosrc, &capsfilter])?;
+        videosrc.link(&capsfilter)?;
 
         let connect_element = pipeline
             .by_name("videoconvert__input")
             .expect("Element with name videoconvert__input not found");
-        gst::Element::link_many(&[&videosrc, &connect_element])?;
+        gst::Element::link_many(&[&capsfilter, &connect_element])?;
 
         Ok(pipeline)
     }
@@ -490,13 +504,26 @@ impl PipelineApp {
             .property_from_str("device", &self.settings.video_src)
             .property_from_str("do-timestamp", "true")
             .build()?;
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("capsfilter__camera")
+            .build()?;
 
-        pipeline.add_many(&[&videosrc])?;
+        capsfilter.set_property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("width", self.settings.video_width)
+                .field("height", self.settings.video_height)
+                .field("format", "YUYV")
+                .build(),
+        );
+
+        pipeline.add_many(&[&videosrc, &capsfilter])?;
+        videosrc.link(&capsfilter)?;
 
         let connect_element = pipeline
             .by_name("videoconvert__input")
             .expect("Element with name videoconvert__input not found");
-        gst::Element::link_many(&[&videosrc, &connect_element])?;
+        gst::Element::link_many(&[&capsfilter, &connect_element])?;
 
         Ok(pipeline)
     }
