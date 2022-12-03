@@ -6,11 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gst::element_error;
-use gst::element_warning;
 use gst::glib;
 use gst::prelude::*;
 
-use anyhow::{Context, Error, Result};
+use anyhow::{Error, Result};
 use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
 use env_logger::Builder;
 use rand::Rng;
@@ -56,7 +55,7 @@ impl fmt::Display for ErrorMessage {
 #[boxed_type(name = "ErrorValue")]
 struct ErrorValue(Arc<Mutex<Option<Error>>>);
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PipelineApp {
     settings: PrintNannyCamSettings,
 }
@@ -69,17 +68,17 @@ impl PipelineApp {
             .expect("Time went backwards, we've got bigger problems");
         let pipeline_name = format!("pipeline-{:?}", &ts);
 
-        let video_udp_port = self.settings.video_udp_port.clone();
+        let video_udp_port = self.settings.video_udp_port;
 
-        let video_width = self.settings.video_width.clone();
-        let video_height = self.settings.video_height.clone();
+        let video_width = self.settings.video_width;
+        let video_height = self.settings.video_height;
         let tflite_model_file = self.settings.tflite_model.model_file.clone();
-        let tensor_height = self.settings.tflite_model.tensor_height.clone();
-        let tensor_width = self.settings.tflite_model.tensor_width.clone();
-        let video_framerate = self.settings.video_framerate.clone();
+        let tensor_height = self.settings.tflite_model.tensor_height;
+        let tensor_width = self.settings.tflite_model.tensor_width;
+        let video_framerate = self.settings.video_framerate;
         let tflite_label_file = self.settings.tflite_model.label_file.clone();
-        let nms_threshold = self.settings.tflite_model.nms_threshold.clone();
-        let overlay_udp_port = self.settings.overlay_udp_port.clone();
+        let nms_threshold = self.settings.tflite_model.nms_threshold;
+        let overlay_udp_port = self.settings.overlay_udp_port;
         let nats_server_uri = self.settings.nats_server_uri.clone();
 
         let pipeline = gst::Pipeline::new(Some(&pipeline_name));
@@ -430,7 +429,7 @@ impl PipelineApp {
 
         let dataframe_agg = gst::ElementFactory::make("dataframe_agg")
             .name("dataframe_agg__df")
-            .property("filter-threshold", nms_threshold as f32 / 100 as f32)
+            .property("filter-threshold", nms_threshold as f32 / 100_f32)
             .property_from_str("output-type", "json")
             .build()?;
 
