@@ -1,5 +1,0 @@
-consolidate-commits = true
-consolidate-pushes = true
-allow-branch = ["main"]
-sign-commit = true
-dependent-version = "upgrade"

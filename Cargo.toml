@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "printnanny-gst-plugin",
-    "printnanny-cam-settings",
 ]
 [build]
 targets = [

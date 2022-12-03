@@ -6,11 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gst::element_error;
-use gst::element_warning;
 use gst::glib;
 use gst::prelude::*;
 
-use anyhow::{Context, Error, Result};
+use anyhow::{Error, Result};
 use clap::{crate_authors, crate_description, value_parser, Arg, ArgMatches, Command};
 use env_logger::Builder;
 use rand::Rng;
@@ -22,7 +21,8 @@ use thiserror::Error;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use printnanny_cam_settings::settings::{PrintNannyCamSettings, VideoSrcType};
+use printnanny_settings::cam::{PrintNannyCamSettings, VideoSrcType};
+use printnanny_settings::printnanny::PrintNannySettings;
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -55,30 +55,30 @@ impl fmt::Display for ErrorMessage {
 #[boxed_type(name = "ErrorValue")]
 struct ErrorValue(Arc<Mutex<Option<Error>>>);
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PipelineApp {
     settings: PrintNannyCamSettings,
 }
 
 impl PipelineApp {
-    fn make_common_pipeline(&self) -> Result<gst::Pipeline, Error> {
+    async fn make_common_pipeline(&self) -> Result<gst::Pipeline, Error> {
         let start = SystemTime::now();
         let ts = start
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards, we've got bigger problems");
         let pipeline_name = format!("pipeline-{:?}", &ts);
 
-        let video_udp_port = self.settings.video_udp_port.clone();
+        let video_udp_port = self.settings.video_udp_port;
 
-        let video_width = self.settings.video_width.clone();
-        let video_height = self.settings.video_height.clone();
+        let video_width = self.settings.video_width;
+        let video_height = self.settings.video_height;
         let tflite_model_file = self.settings.tflite_model.model_file.clone();
-        let tensor_height = self.settings.tflite_model.tensor_height.clone();
-        let tensor_width = self.settings.tflite_model.tensor_width.clone();
-        let video_framerate = self.settings.video_framerate.clone();
+        let tensor_height = self.settings.tflite_model.tensor_height;
+        let tensor_width = self.settings.tflite_model.tensor_width;
+        let video_framerate = self.settings.video_framerate;
         let tflite_label_file = self.settings.tflite_model.label_file.clone();
-        let nms_threshold = self.settings.tflite_model.nms_threshold.clone();
-        let overlay_udp_port = self.settings.overlay_udp_port.clone();
+        let nms_threshold = self.settings.tflite_model.nms_threshold;
+        let overlay_udp_port = self.settings.overlay_udp_port;
         let nats_server_uri = self.settings.nats_server_uri.clone();
 
         let pipeline = gst::Pipeline::new(Some(&pipeline_name));
@@ -255,7 +255,7 @@ impl PipelineApp {
         match self.settings.hls_http_enabled {
             Some(true) => insert_h264_sinks(true)?,
             Some(false) => insert_h264_sinks(false)?,
-            None => match self.settings.detect_hls_http_enabled()? {
+            None => match self.settings.detect_hls_http_enabled().await? {
                 true => insert_h264_sinks(true)?,
                 false => insert_h264_sinks(false)?,
             },
@@ -429,7 +429,7 @@ impl PipelineApp {
 
         let dataframe_agg = gst::ElementFactory::make("dataframe_agg")
             .name("dataframe_agg__df")
-            .property("filter-threshold", nms_threshold as f32 / 100 as f32)
+            .property("filter-threshold", nms_threshold as f32 / 100_f32)
             .property_from_str("output-type", "json")
             .build()?;
 
@@ -466,8 +466,8 @@ impl PipelineApp {
         Ok(pipeline)
     }
 
-    fn make_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
-        let pipeline = self.make_common_pipeline()?;
+    async fn make_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let pipeline = self.make_common_pipeline().await?;
         let videosrc = gst::ElementFactory::make("libcamerasrc").build()?;
 
         pipeline.add_many(&[&videosrc])?;
@@ -480,8 +480,8 @@ impl PipelineApp {
         Ok(pipeline)
     }
 
-    fn make_uri_pipeline(&self) -> Result<gst::Pipeline, Error> {
-        let pipeline = self.make_common_pipeline()?;
+    async fn make_uri_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let pipeline = self.make_common_pipeline().await?;
 
         let uriencodebin = gst::ElementFactory::make("uridecodebin3")
             .property_from_str("caps", "video/x-raw")
@@ -546,13 +546,13 @@ impl PipelineApp {
         Ok(pipeline)
     }
 
-    pub fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
+    pub async fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
         gst::init()?;
 
         let pipeline = match self.settings.video_src_type {
-            VideoSrcType::Uri => self.make_uri_pipeline()?,
-            VideoSrcType::File => self.make_uri_pipeline()?,
-            VideoSrcType::Device => self.make_device_pipeline()?,
+            VideoSrcType::Uri => self.make_uri_pipeline().await?,
+            VideoSrcType::File => self.make_uri_pipeline().await?,
+            VideoSrcType::Device => self.make_device_pipeline().await?,
         };
 
         Ok(pipeline)
@@ -636,7 +636,8 @@ impl From<&ArgMatches> for PipelineApp {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let mut log_builder = Builder::new();
 
     let app_name = "printnanny-gst-pipeline";
@@ -842,15 +843,17 @@ fn main() {
 
     let app = match args.value_of("settings") {
         Some(settings_file) => {
-            let settings = PrintNannyCamSettings::from_toml(PathBuf::from(settings_file))
+            let settings = PrintNannySettings::from_toml(PathBuf::from(settings_file))
                 .expect("Failed to extract settings");
             info!("Pipeline settings: {:?}", settings);
-            PipelineApp { settings }
+            PipelineApp {
+                settings: settings.cam,
+            }
         }
         None => PipelineApp::from(&args),
     };
 
-    match app.create_pipeline().and_then(run) {
+    match app.create_pipeline().await.and_then(run) {
         Ok(r) => r,
         Err(e) => error!("Error running pipeline: {:?}", e),
     }
