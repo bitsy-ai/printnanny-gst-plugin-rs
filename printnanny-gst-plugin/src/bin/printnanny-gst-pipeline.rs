@@ -230,11 +230,12 @@ impl PipelineApp {
                 false => {
                     let h264_video_elements = &[
                         &invideoconverter,
-                        &invideorate,
-                        &invideoscaler,
-                        &raw_video_capsfilter,
+                        // &invideorate,
+                        // &invideoscaler,
+                        // &raw_video_capsfilter,
                         &video_tee,
                         &h264_queue,
+                        &invideoconverter,
                         &encoder,
                         &video_h264_capsfilter,
                         &rtp_queue,
