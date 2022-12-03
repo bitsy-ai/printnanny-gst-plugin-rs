@@ -1,5 +1,8 @@
 .PHONY: patch minor major patch-execute minor-execute major-execute
 
+DEV_USER ?= pi
+DEV_MACHINE ?= pn-dev
+
 patch:
 	cargo release patch --no-verify --no-publish
 
@@ -17,3 +20,8 @@ major:
 	
 major-execute:
 	cargo release major --no-verify --no-publish --execute
+
+dev-build:
+	cross build --workspace --target=aarch64-unknown-linux-gnu
+	rsync --progress -e "ssh -o StrictHostKeyChecking=no" target/aarch64-unknown-linux-gnu/debug/printnanny-gst-pipeline $(DEV_USER)@$(DEV_MACHINE).local:~/printnanny-gst-pipeline
+

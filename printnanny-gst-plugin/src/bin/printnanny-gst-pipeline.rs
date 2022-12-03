@@ -149,13 +149,14 @@ impl PipelineApp {
             }
         };
 
-        let invideorate = gst::ElementFactory::make("videorate")
-            .name("videorate__input")
-            .build()?;
+        // TODO: move videorate / videoscale into File/URI pipelines only
+        // let invideorate = gst::ElementFactory::make("videorate")
+        //     .name("videorate__input")
+        //     .build()?;
 
-        let invideoscaler = gst::ElementFactory::make("videoscale")
-            .name("videoscale__input")
-            .build()?;
+        // let invideoscaler = gst::ElementFactory::make("videoscale")
+        //     .name("videoscale__input")
+        //     .build()?;
 
         // split h264-encoded video stream with a tee for compatibility with OctoPrint's webcam plugin
         // OctoPrint's WebRTC support is still experimental and is not compatible with Janus Gateway's signaling
@@ -186,12 +187,12 @@ impl PipelineApp {
                         .property("playlist-root", &self.settings.hls_playlist_root)
                         .build()?;
                     let h264_video_elements = &[
-                        &invideoconverter,
-                        &invideorate,
-                        &invideoscaler,
-                        &raw_video_capsfilter,
+                        // &invideorate,
+                        // &invideoscaler,
+                        // &raw_video_capsfilter,
                         &video_tee,
                         &h264_queue,
+                        &invideoconverter,
                         &encoder,
                         &video_h264_capsfilter,
                         &h264_tee,
@@ -228,12 +229,12 @@ impl PipelineApp {
                 }
                 false => {
                     let h264_video_elements = &[
-                        &invideoconverter,
-                        &invideorate,
-                        &invideoscaler,
-                        &raw_video_capsfilter,
+                        // &invideorate,
+                        // &invideoscaler,
+                        // &raw_video_capsfilter,
                         &video_tee,
                         &h264_queue,
+                        &invideoconverter,
                         &encoder,
                         &video_h264_capsfilter,
                         &rtp_queue,
@@ -466,16 +467,67 @@ impl PipelineApp {
         Ok(pipeline)
     }
 
-    async fn make_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
-        let pipeline = self.make_common_pipeline().await?;
-        let videosrc = gst::ElementFactory::make("libcamerasrc").build()?;
+    async fn make_csi_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let device_monitor = gst::DeviceMonitor::new();
+        device_monitor.set_show_all_devices(true);
 
-        pipeline.add_many(&[&videosrc])?;
+        let pipeline = self.make_common_pipeline().await?;
+        let videosrc = gst::ElementFactory::make("libcamerasrc")
+            .property_from_str("name", "camera0")
+            .build()?;
+
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("capsfilter__camera")
+            .build()?;
+
+        capsfilter.set_property(
+            "caps",
+            gst_video::VideoCapsBuilder::new()
+                .width(self.settings.video_width)
+                .height(self.settings.video_height)
+                .framerate(self.settings.video_framerate.into())
+                .format(gst_video::VideoFormat::Yuy2) // equivalent to YUYV pixel format
+                .build(),
+        );
+
+        pipeline.add_many(&[&videosrc, &capsfilter])?;
+        videosrc.link(&capsfilter)?;
+        let connect_element = pipeline
+            .by_name("tee__inputvideo")
+            .expect("Element with name tee__inputvideo not found");
+
+        gst::Element::link_many(&[&capsfilter, &connect_element])?;
+
+        Ok(pipeline)
+    }
+    async fn make_usb_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let pipeline = self.make_common_pipeline().await?;
+        let videosrc = gst::ElementFactory::make("v4l2src")
+            .property_from_str("name", "camera0")
+            .property_from_str("device", &self.settings.video_src)
+            .property_from_str("do-timestamp", "true")
+            .build()?;
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("capsfilter__camera")
+            .build()?;
+
+        capsfilter.set_property(
+            "caps",
+            gst_video::VideoCapsBuilder::new()
+                .width(self.settings.video_width)
+                .height(self.settings.video_height)
+                .framerate(self.settings.video_framerate.into())
+                .format(gst_video::VideoFormat::Yuy2) // equivalent to YUYV pixel format
+                .build(),
+        );
+
+        pipeline.add_many(&[&videosrc, &capsfilter])?;
+        videosrc.link(&capsfilter)?;
 
         let connect_element = pipeline
-            .by_name("videoconvert__input")
-            .expect("Element with name videoconvert__input not found");
-        gst::Element::link_many(&[&videosrc, &connect_element])?;
+            .by_name("tee__inputvideo")
+            .expect("Element with name tee__inputvideo not found");
+        gst::Element::link_many(&[&capsfilter, &connect_element])?;
 
         Ok(pipeline)
     }
@@ -552,7 +604,8 @@ impl PipelineApp {
         let pipeline = match self.settings.video_src_type {
             VideoSrcType::Uri => self.make_uri_pipeline().await?,
             VideoSrcType::File => self.make_uri_pipeline().await?,
-            VideoSrcType::Device => self.make_device_pipeline().await?,
+            VideoSrcType::CSI => self.make_csi_device_pipeline().await?,
+            VideoSrcType::USB => self.make_usb_device_pipeline().await?,
         };
 
         Ok(pipeline)
