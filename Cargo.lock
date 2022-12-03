@@ -2577,8 +2577,8 @@ dependencies = [
 
 [[package]]
 name = "printnanny-dbus"
-version = "0.1.0"
-source = "git+https://github.com/bitsy-ai/printnanny-cli#b9e3328a4095d2215d55334e2271d33a2a1ece80"
+version = "0.2.0"
+source = "git+https://github.com/bitsy-ai/printnanny-cli#8af3dbe1a91dbd53c24c16191fb3e4737b2bf9c8"
 dependencies = [
  "async-trait",
  "printnanny-asyncapi-models",
@@ -2623,8 +2623,8 @@ dependencies = [
 
 [[package]]
 name = "printnanny-settings"
-version = "0.1.0"
-source = "git+https://github.com/bitsy-ai/printnanny-cli#b9e3328a4095d2215d55334e2271d33a2a1ece80"
+version = "0.2.0"
+source = "git+https://github.com/bitsy-ai/printnanny-cli#8af3dbe1a91dbd53c24c16191fb3e4737b2bf9c8"
 dependencies = [
  "async-trait",
  "bytes",

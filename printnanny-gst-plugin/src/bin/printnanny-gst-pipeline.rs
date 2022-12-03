@@ -466,9 +466,30 @@ impl PipelineApp {
         Ok(pipeline)
     }
 
-    async fn make_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
+    async fn make_csi_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
         let pipeline = self.make_common_pipeline().await?;
-        let videosrc = gst::ElementFactory::make("libcamerasrc").build()?;
+        let videosrc = gst::ElementFactory::make("v4l2src")
+            .property_from_str("name", "camera0")
+            .property_from_str("device", &self.settings.video_src)
+            .property_from_str("do-timestamp", "true")
+            .build()?;
+
+        pipeline.add_many(&[&videosrc])?;
+
+        let connect_element = pipeline
+            .by_name("videoconvert__input")
+            .expect("Element with name videoconvert__input not found");
+        gst::Element::link_many(&[&videosrc, &connect_element])?;
+
+        Ok(pipeline)
+    }
+    async fn make_usb_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let pipeline = self.make_common_pipeline().await?;
+        let videosrc = gst::ElementFactory::make("v4l2src")
+            .property_from_str("name", "camera0")
+            .property_from_str("device", &self.settings.video_src)
+            .property_from_str("do-timestamp", "true")
+            .build()?;
 
         pipeline.add_many(&[&videosrc])?;
 
@@ -552,7 +573,8 @@ impl PipelineApp {
         let pipeline = match self.settings.video_src_type {
             VideoSrcType::Uri => self.make_uri_pipeline().await?,
             VideoSrcType::File => self.make_uri_pipeline().await?,
-            VideoSrcType::Device => self.make_device_pipeline().await?,
+            VideoSrcType::CSI => self.make_csi_device_pipeline().await?,
+            VideoSrcType::USB => self.make_usb_device_pipeline().await?,
         };
 
         Ok(pipeline)
