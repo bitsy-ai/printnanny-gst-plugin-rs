@@ -149,13 +149,14 @@ impl PipelineApp {
             }
         };
 
-        let invideorate = gst::ElementFactory::make("videorate")
-            .name("videorate__input")
-            .build()?;
+        // TODO: move videorate / videoscale into File/URI pipelines only
+        // let invideorate = gst::ElementFactory::make("videorate")
+        //     .name("videorate__input")
+        //     .build()?;
 
-        let invideoscaler = gst::ElementFactory::make("videoscale")
-            .name("videoscale__input")
-            .build()?;
+        // let invideoscaler = gst::ElementFactory::make("videoscale")
+        //     .name("videoscale__input")
+        //     .build()?;
 
         // split h264-encoded video stream with a tee for compatibility with OctoPrint's webcam plugin
         // OctoPrint's WebRTC support is still experimental and is not compatible with Janus Gateway's signaling
@@ -186,12 +187,12 @@ impl PipelineApp {
                         .property("playlist-root", &self.settings.hls_playlist_root)
                         .build()?;
                     let h264_video_elements = &[
-                        &invideoconverter,
-                        &invideorate,
-                        &invideoscaler,
-                        &raw_video_capsfilter,
+                        // &invideorate,
+                        // &invideoscaler,
+                        // &raw_video_capsfilter,
                         &video_tee,
                         &h264_queue,
+                        &invideoconverter,
                         &encoder,
                         &video_h264_capsfilter,
                         &h264_tee,
@@ -483,6 +484,7 @@ impl PipelineApp {
             gst_video::VideoCapsBuilder::new()
                 .width(self.settings.video_width)
                 .height(self.settings.video_height)
+                .framerate(self.settings.video_framerate.into())
                 .format(gst_video::VideoFormat::Yuy2) // equivalent to YUYV pixel format
                 .build(),
         );
@@ -513,6 +515,7 @@ impl PipelineApp {
             gst_video::VideoCapsBuilder::new()
                 .width(self.settings.video_width)
                 .height(self.settings.video_height)
+                .framerate(self.settings.video_framerate.into())
                 .format(gst_video::VideoFormat::Yuy2) // equivalent to YUYV pixel format
                 .build(),
         );
