@@ -480,10 +480,10 @@ impl PipelineApp {
 
         capsfilter.set_property(
             "caps",
-            gst::Caps::builder("video/x-raw")
-                .field("width", self.settings.video_width)
-                .field("height", self.settings.video_height)
-                .field("format", "YUYV")
+            gst_video::VideoCapsBuilder::new()
+                .width(self.settings.video_width)
+                .height(self.settings.video_height)
+                .format(gst_video::VideoFormat::Yuy2) // equivalent to YUYV pixel format
                 .build(),
         );
 
@@ -510,10 +510,10 @@ impl PipelineApp {
 
         capsfilter.set_property(
             "caps",
-            gst::Caps::builder("video/x-raw")
-                .field("width", self.settings.video_width)
-                .field("height", self.settings.video_height)
-                .field("format", "YUYV")
+            gst_video::VideoCapsBuilder::new()
+                .width(self.settings.video_width)
+                .height(self.settings.video_height)
+                .format(gst_video::VideoFormat::Yuy2) // equivalent to YUYV pixel format
                 .build(),
         );
 
