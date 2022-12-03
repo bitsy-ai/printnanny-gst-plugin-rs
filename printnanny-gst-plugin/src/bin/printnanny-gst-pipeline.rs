@@ -22,7 +22,8 @@ use thiserror::Error;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use printnanny_cam_settings::settings::{PrintNannyCamSettings, VideoSrcType};
+use printnanny_settings::cam::{PrintNannyCamSettings, VideoSrcType};
+use printnanny_settings::printnanny::PrintNannySettings;
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -61,7 +62,7 @@ pub struct PipelineApp {
 }
 
 impl PipelineApp {
-    fn make_common_pipeline(&self) -> Result<gst::Pipeline, Error> {
+    async fn make_common_pipeline(&self) -> Result<gst::Pipeline, Error> {
         let start = SystemTime::now();
         let ts = start
             .duration_since(UNIX_EPOCH)
@@ -255,7 +256,7 @@ impl PipelineApp {
         match self.settings.hls_http_enabled {
             Some(true) => insert_h264_sinks(true)?,
             Some(false) => insert_h264_sinks(false)?,
-            None => match self.settings.detect_hls_http_enabled()? {
+            None => match self.settings.detect_hls_http_enabled().await? {
                 true => insert_h264_sinks(true)?,
                 false => insert_h264_sinks(false)?,
             },
@@ -466,8 +467,8 @@ impl PipelineApp {
         Ok(pipeline)
     }
 
-    fn make_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
-        let pipeline = self.make_common_pipeline()?;
+    async fn make_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let pipeline = self.make_common_pipeline().await?;
         let videosrc = gst::ElementFactory::make("libcamerasrc").build()?;
 
         pipeline.add_many(&[&videosrc])?;
@@ -480,8 +481,8 @@ impl PipelineApp {
         Ok(pipeline)
     }
 
-    fn make_uri_pipeline(&self) -> Result<gst::Pipeline, Error> {
-        let pipeline = self.make_common_pipeline()?;
+    async fn make_uri_pipeline(&self) -> Result<gst::Pipeline, Error> {
+        let pipeline = self.make_common_pipeline().await?;
 
         let uriencodebin = gst::ElementFactory::make("uridecodebin3")
             .property_from_str("caps", "video/x-raw")
@@ -546,13 +547,13 @@ impl PipelineApp {
         Ok(pipeline)
     }
 
-    pub fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
+    pub async fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
         gst::init()?;
 
         let pipeline = match self.settings.video_src_type {
-            VideoSrcType::Uri => self.make_uri_pipeline()?,
-            VideoSrcType::File => self.make_uri_pipeline()?,
-            VideoSrcType::Device => self.make_device_pipeline()?,
+            VideoSrcType::Uri => self.make_uri_pipeline().await?,
+            VideoSrcType::File => self.make_uri_pipeline().await?,
+            VideoSrcType::Device => self.make_device_pipeline().await?,
         };
 
         Ok(pipeline)
@@ -636,7 +637,8 @@ impl From<&ArgMatches> for PipelineApp {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let mut log_builder = Builder::new();
 
     let app_name = "printnanny-gst-pipeline";
@@ -842,15 +844,17 @@ fn main() {
 
     let app = match args.value_of("settings") {
         Some(settings_file) => {
-            let settings = PrintNannyCamSettings::from_toml(PathBuf::from(settings_file))
+            let settings = PrintNannySettings::from_toml(PathBuf::from(settings_file))
                 .expect("Failed to extract settings");
             info!("Pipeline settings: {:?}", settings);
-            PipelineApp { settings }
+            PipelineApp {
+                settings: settings.cam,
+            }
         }
         None => PipelineApp::from(&args),
     };
 
-    match app.create_pipeline().and_then(run) {
+    match app.create_pipeline().await.and_then(run) {
         Ok(r) => r,
         Err(e) => error!("Error running pipeline: {:?}", e),
     }
