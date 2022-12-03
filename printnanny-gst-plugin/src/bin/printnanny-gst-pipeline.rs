@@ -229,7 +229,6 @@ impl PipelineApp {
                 }
                 false => {
                     let h264_video_elements = &[
-                        &invideoconverter,
                         // &invideorate,
                         // &invideoscaler,
                         // &raw_video_capsfilter,
@@ -492,10 +491,13 @@ impl PipelineApp {
 
         pipeline.add_many(&[&videosrc, &capsfilter])?;
         videosrc.link(&capsfilter)?;
-
         let connect_element = pipeline
-            .by_name("videoconvert__input")
-            .expect("Element with name videoconvert__input not found");
+            .by_name("tee__inputvideo")
+            .expect("Element with name tee__inputvideo not found");
+
+        // let connect_element = pipeline
+        //     .by_name("videoconvert__input")
+        //     .expect("Element with name videoconvert__input not found");
         gst::Element::link_many(&[&capsfilter, &connect_element])?;
 
         Ok(pipeline)
@@ -525,8 +527,8 @@ impl PipelineApp {
         videosrc.link(&capsfilter)?;
 
         let connect_element = pipeline
-            .by_name("videoconvert__input")
-            .expect("Element with name videoconvert__input not found");
+            .by_name("tee__inputvideo")
+            .expect("Element with name tee__inputvideo not found");
         gst::Element::link_many(&[&capsfilter, &connect_element])?;
 
         Ok(pipeline)
