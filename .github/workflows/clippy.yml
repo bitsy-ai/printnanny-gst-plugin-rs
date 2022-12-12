@@ -11,16 +11,21 @@ jobs:
   lint:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout printnanny-cli
+        uses: actions/checkout@v2
+        with:
+          repository: "bitsy-ai/printnanny-cli"
+          path: printnanny-cli
+      - name: Checkout source
+        uses: actions/checkout@v2
+        with:
+          path: git
       - name: Install latest nightly
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
           components: rustfmt, clippy
-      - uses: actions/setup-node@v2
-        with:
-          node-version: "16"
       - name: Install gstreamer dependencies
         run: |
           sudo apt-get remove libunwind-14-dev
@@ -31,4 +36,6 @@ jobs:
             gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
             gstreamer1.0-libav libgstrtspserver-1.0-dev libges-1.0-dev \
             gstreamer1.0-tools gstreamer1.0-x
-      - run: cargo clippy --workspace
+      - name: Clippy
+        working-directory: git
+        run: cargo clippy --workspace

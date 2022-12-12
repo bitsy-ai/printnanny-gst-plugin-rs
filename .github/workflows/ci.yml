@@ -78,14 +78,23 @@ jobs:
       - name: Install cross
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
-      - uses: actions/checkout@v2
-      - run: tools/ci/set_rust_version.bash ${{ matrix.channel }} ${{ matrix.target }}
-      - uses: actions/setup-node@v2
+      - name: Checkout printnanny-cli
+        uses: actions/checkout@v2
         with:
-          node-version: "16"
+          repository: "bitsy-ai/printnanny-cli"
+          path: printnanny-cli
+      - name: Checkout source
+        uses: actions/checkout@v2
+        with:
+          path: git
+      - name: Set rust node-version
+        working-directory: git
+        run: tools/ci/set_rust_version.bash ${{ matrix.channel }} ${{ matrix.target }}
       - name: Build rust
+        working-directory: git
         run: tools/ci/build.bash $(which cross) ${{ matrix.target }}
       - name: Run tests
+        working-directory: git
         run: |
           tools/ci/test.bash $(which cross) ${{ matrix.target }}
         if: |
