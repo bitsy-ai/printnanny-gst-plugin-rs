@@ -2,8 +2,3 @@
 members = [
     "printnanny-gst-plugin",
 ]
-[build]
-targets = [
-    "aarch64-unknown-linux-gnu",
-    "x86_64-unknown-linux-gnu",
-]
