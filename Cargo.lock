@@ -2624,9 +2624,9 @@ dependencies = [
 
 [[package]]
 name = "printnanny-asyncapi-models"
-version = "0.1.31"
+version = "0.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45727f223bea23763db6e9dcd8b674729d6a67cc0bfb57cf8fd9980ecf11d740"
+checksum = "71972aa1c4e21a495449ee22a2126c481c290e3289ac57a2894ef1a92f488f9d"
 dependencies = [
  "serde",
  "serde_json",
@@ -2634,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "printnanny-dbus"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2642,6 +2642,7 @@ dependencies = [
  "log",
  "printnanny-asyncapi-models",
  "serde",
+ "thiserror",
  "tokio",
  "zbus",
  "zbus_systemd",
@@ -2683,7 +2684,7 @@ dependencies = [
 
 [[package]]
 name = "printnanny-settings"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "bytes",
