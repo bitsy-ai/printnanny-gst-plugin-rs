@@ -21,7 +21,9 @@ use thiserror::Error;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use printnanny_settings::cam::{PrintNannyCamSettings, VideoSrcType};
+use printnanny_settings::cam::{
+    CameraVideoSource, MediaVideoSource, PrintNannyCamSettings, VideoSource, VideoSrcType,
+};
 use printnanny_settings::printnanny::PrintNannySettings;
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
@@ -467,13 +469,14 @@ impl PipelineApp {
         Ok(pipeline)
     }
 
-    async fn make_csi_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
-        let device_monitor = gst::DeviceMonitor::new();
-        device_monitor.set_show_all_devices(true);
-
+    async fn make_libcamera_pipeline(
+        &self,
+        src: &CameraVideoSource,
+    ) -> Result<gst::Pipeline, Error> {
         let pipeline = self.make_common_pipeline().await?;
         let videosrc = gst::ElementFactory::make("libcamerasrc")
             .property_from_str("name", "camera0")
+            .property_from_str("camera-name", &src.device_name)
             .build()?;
 
         let capsfilter = gst::ElementFactory::make("capsfilter")
@@ -500,45 +503,14 @@ impl PipelineApp {
 
         Ok(pipeline)
     }
-    async fn make_usb_device_pipeline(&self) -> Result<gst::Pipeline, Error> {
-        let pipeline = self.make_common_pipeline().await?;
-        let videosrc = gst::ElementFactory::make("v4l2src")
-            .property_from_str("name", "camera0")
-            .property_from_str("device", &self.settings.video_src)
-            .property_from_str("do-timestamp", "true")
-            .build()?;
-        let capsfilter = gst::ElementFactory::make("capsfilter")
-            .name("capsfilter__camera")
-            .build()?;
 
-        capsfilter.set_property(
-            "caps",
-            gst_video::VideoCapsBuilder::new()
-                .width(self.settings.video_width)
-                .height(self.settings.video_height)
-                .framerate(self.settings.video_framerate.into())
-                .format(gst_video::VideoFormat::Yuy2) // equivalent to YUYV pixel format
-                .build(),
-        );
-
-        pipeline.add_many(&[&videosrc, &capsfilter])?;
-        videosrc.link(&capsfilter)?;
-
-        let connect_element = pipeline
-            .by_name("tee__inputvideo")
-            .expect("Element with name tee__inputvideo not found");
-        gst::Element::link_many(&[&capsfilter, &connect_element])?;
-
-        Ok(pipeline)
-    }
-
-    async fn make_uri_pipeline(&self) -> Result<gst::Pipeline, Error> {
+    async fn make_uri_pipeline(&self, src: &MediaVideoSource) -> Result<gst::Pipeline, Error> {
         let pipeline = self.make_common_pipeline().await?;
 
         let uriencodebin = gst::ElementFactory::make("uridecodebin3")
             .property_from_str("caps", "video/x-raw")
             .property("use-buffering", true)
-            .property("uri", &self.settings.video_src)
+            .property("uri", &src.uri)
             .build()?;
 
         pipeline.add_many(&[&uriencodebin])?;
@@ -601,11 +573,11 @@ impl PipelineApp {
     pub async fn create_pipeline(&self) -> Result<gst::Pipeline, Error> {
         gst::init()?;
 
-        let pipeline = match self.settings.video_src_type {
-            VideoSrcType::Uri => self.make_uri_pipeline().await?,
-            VideoSrcType::File => self.make_uri_pipeline().await?,
-            VideoSrcType::CSI => self.make_csi_device_pipeline().await?,
-            VideoSrcType::USB => self.make_usb_device_pipeline().await?,
+        let pipeline = match &self.settings.video_src {
+            VideoSource::Uri(src) => self.make_uri_pipeline(src).await?,
+            VideoSource::File(src) => self.make_uri_pipeline(src).await?,
+            VideoSource::CSI(src) => self.make_libcamera_pipeline(src).await?,
+            VideoSource::USB(src) => self.make_libcamera_pipeline(src).await?,
         };
 
         Ok(pipeline)
